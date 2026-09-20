@@ -35,4 +35,42 @@ describe("focus-visible CSS", () => {
 
     expect(css).toMatch(/\.message-list-row--unread\[aria-selected="false"\]:hover/i);
   });
+
+  it("gives unread rows a wash, a gutter marker and a stronger date", () => {
+    const css = readFileSync(join(process.cwd(), "src", "styles", "index.css"), "utf8");
+
+    // The wash is what separates an unread row from a read one at a glance, and
+    // it has to be answered in dark mode rather than left to a light tint.
+    expect(css).toMatch(
+      /\.message-list-row--unread\[aria-selected="false"\],\s*\.thread-list-row--unread\[aria-selected="false"\]\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--color-accent\)/i,
+    );
+    expect(css).toMatch(
+      /\[data-theme="dark"\]\s*\.message-list-row--unread\[aria-selected="false"\],\s*\[data-theme="dark"\]\s*\.thread-list-row--unread\[aria-selected="false"\]\s*\{[^}]*background:\s*color-mix/i,
+    );
+    // Scoped to the unselected row on purpose: unscoped, the dark-mode wash
+    // would tie with the selection rule on specificity and win by source order,
+    // so a selected unread row would lose its selection fill.
+    expect(css).not.toMatch(/^\.message-list-row--unread,\s*$/m);
+    expect(css).not.toMatch(/^\[data-theme="dark"\]\s*\.message-list-row--unread,\s*$/m);
+
+    // The marker is positioned into the row's padding, so it costs no layout and
+    // forms a column at a fixed x down the list.
+    expect(css).toMatch(/\.message-row-unread-dot,\s*\.thread-row-unread-dot\s*\{[^}]*position:\s*absolute/i);
+    expect(css).toMatch(/\.message-row-unread-dot,\s*\.thread-row-unread-dot\s*\{[^}]*left:\s*-\d+px/i);
+    expect(css).toMatch(/\.message-row-head,\s*\.thread-row-head\s*\{[^}]*position:\s*relative/i);
+
+    // Read mail steps back so unread mail can step forward.
+    expect(css).toMatch(
+      /\.message-row-sender-name,\s*\.message-row-subject[^{]*\{[^}]*color:\s*var\(--color-text-secondary\)/i,
+    );
+    expect(css).toMatch(
+      /\.message-list-row--unread\s*\.message-row-sender-name[^{]*\{[^}]*color:\s*var\(--color-text-primary\)/i,
+    );
+
+    // Hover deepens the wash instead of replacing it, so an unread row stays
+    // visibly unread under the pointer.
+    expect(css).toMatch(
+      /\.message-list-row--unread\[aria-selected="false"\]:hover[^{]*\{[^}]*background:\s*color-mix\(in srgb, var\(--color-accent\)/i,
+    );
+  });
 });

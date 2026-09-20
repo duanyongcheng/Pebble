@@ -130,7 +130,10 @@ function MessageItem({ message, labels = [], isSelected, onClick, onToggleStar, 
           }}
         />
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2px" }}>
+      <div
+        className="message-row-head"
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2px" }}
+      >
         {batchMode && (
           <input
             type="checkbox"
@@ -158,12 +161,9 @@ function MessageItem({ message, labels = [], isSelected, onClick, onToggleStar, 
           }}
         >
           {accountBadge && <AccountBadge badge={accountBadge} />}
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span className="message-row-sender-name" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
             {primaryContact}
           </span>
-          {!message.is_read && (
-            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "var(--color-accent)", flexShrink: 0 }} />
-          )}
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
           {inKanban && (
@@ -176,17 +176,20 @@ function MessageItem({ message, labels = [], isSelected, onClick, onToggleStar, 
             <Paperclip size={13} color="var(--color-text-secondary)" />
           )}
           <span
+            className="message-row-date"
             style={{
               fontSize: "11px",
-              color: "var(--color-text-secondary)",
-              fontWeight: "normal",
             }}
           >
             {formatDate(message.date)}
           </span>
         </div>
+        {/* Marks the row as unread in the list's own gutter, beside the sender
+            rather than after the name, so the markers form a column. */}
+        {!message.is_read && <span className="message-row-unread-dot" aria-hidden="true" />}
       </div>
       <div
+        className="message-row-subject"
         style={{
           fontSize: "12.5px",
           overflow: "hidden",

@@ -948,11 +948,115 @@ option {
   background: var(--color-bg-hover);
 }
 
+/* Unread mail.
+   One cue was not enough. An unread row now carries three: a wash of the accent
+   colour, a marker in the left gutter that lines up as a column down the list,
+   and the sender and subject left at full strength. Read mail recedes to the
+   secondary colour instead, and it is that contrast — not the marker on its own
+   — which lets a list be scanned rather than read a row at a time.
+
+   The wash is scoped to the unselected row so the selection fill always wins.
+   Left unscoped, the dark-mode rule below would tie on specificity with
+   `.message-list-row[aria-selected="true"]` and take the row by source order,
+   painting a selected unread row as unread and losing the selection. */
+.message-list-row--unread[aria-selected="false"],
+.thread-list-row--unread[aria-selected="false"] {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+[data-theme="dark"] .message-list-row--unread[aria-selected="false"],
+[data-theme="dark"] .thread-list-row--unread[aria-selected="false"] {
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+/* The marker rides in the row's own left padding, so it costs no layout: the
+   sender, subject and snippet keep one left edge whether a row is unread or
+   not. Pinned to the first line rather than to the row, it forms a column at a
+   fixed x — the previous marker sat after the sender's name, so it trailed
+   whatever that name happened to measure and no two rows lined up. It also
+   clears the 3px account bar the combined inbox draws at the very edge. */
+.message-row-head,
+.thread-row-head {
+  position: relative;
+}
+
+.message-row-unread-dot,
+.thread-row-unread-dot {
+  position: absolute;
+  /* The row pads 14px, so -9px puts the 7px marker at 5–12px: clear of the 3px
+     account bar at the very edge, and 2px clear of the text it sits beside. */
+  left: -9px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+/* Read mail steps back so unread mail can step forward. */
+.message-row-sender-name,
+.message-row-subject,
+.thread-row-participants,
+.thread-row-subject {
+  color: var(--color-text-secondary);
+}
+
+.message-list-row--unread .message-row-sender-name,
+.message-list-row--unread .message-row-subject,
+.thread-list-row--unread .thread-row-participants,
+.thread-list-row--unread .thread-row-subject {
+  color: var(--color-text-primary);
+}
+
+.message-row-date,
+.thread-row-date {
+  color: var(--color-text-secondary);
+  font-weight: normal;
+}
+
+.message-list-row--unread .message-row-date,
+.thread-list-row--unread .thread-row-date {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+/* How much is waiting inside a thread. A message row has only its own read
+   state to report, but a thread can hold a dozen unread and one dot cannot say
+   so. */
+.thread-row-unread-count {
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent);
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Hover deepens the wash rather than replacing it, so an unread row stays
+   visibly unread under the pointer and the fill stays translucent over a
+   wallpaper. */
 .message-list-row--unread[aria-selected="false"]:hover,
 .message-list-row--unread[aria-selected="false"]:focus,
 .thread-list-row--unread[aria-selected="false"]:hover,
 .thread-list-row--unread[aria-selected="false"]:focus {
-  background: var(--color-bg-hover);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+[data-theme="dark"] .message-list-row--unread[aria-selected="false"]:hover,
+[data-theme="dark"] .message-list-row--unread[aria-selected="false"]:focus,
+[data-theme="dark"] .thread-list-row--unread[aria-selected="false"]:hover,
+[data-theme="dark"] .thread-list-row--unread[aria-selected="false"]:focus {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
 .app-shell--with-background .message-list-row[aria-selected="true"],

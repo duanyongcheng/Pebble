@@ -50,6 +50,71 @@ describe("ThreadItem", () => {
     expect(screen.getByRole("option").className).not.toContain("thread-list-row--unread");
   });
 
+  it("says how much of an unread thread is waiting", () => {
+    render(
+      <ThreadItem
+        thread={makeThread({ unread_count: 3 })}
+        isSelected={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    const count = screen.getByRole("option").querySelector(".thread-row-unread-count") as HTMLElement;
+
+    // A dot says "something is unread"; the count says whether opening the
+    // thread is worth the interruption.
+    expect(count.textContent).toBe("3");
+    expect(count.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("caps the unread count so the badge keeps its width", () => {
+    render(
+      <ThreadItem
+        thread={makeThread({ unread_count: 128 })}
+        isSelected={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    expect(
+      (screen.getByRole("option").querySelector(".thread-row-unread-count") as HTMLElement).textContent,
+    ).toBe("99+");
+  });
+
+  it("shows no unread count on a fully read thread", () => {
+    render(
+      <ThreadItem
+        thread={makeThread({ unread_count: 0 })}
+        isSelected={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByRole("option");
+
+    expect(row.querySelector(".thread-row-unread-count")).toBeNull();
+    expect(row.querySelector(".thread-row-unread-dot")).toBeNull();
+  });
+
+  it("carries the classes that let read threads recede behind unread ones", () => {
+    render(
+      <ThreadItem
+        thread={makeThread({ unread_count: 2 })}
+        isSelected={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByRole("option");
+    const dot = row.querySelector(".thread-row-unread-dot");
+
+    expect(row.querySelector(".thread-row-participants")).toBeTruthy();
+    expect(row.querySelector(".thread-row-subject")).toBeTruthy();
+    expect(row.querySelector(".thread-row-date")).toBeTruthy();
+    // The marker sits in the row's gutter, pinned to the head.
+    expect(dot?.parentElement?.className).toContain("thread-row-head");
+  });
+
   it("names the source mailbox when the combined inbox supplies a badge", () => {
     render(
       <ThreadItem

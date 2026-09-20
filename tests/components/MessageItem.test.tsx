@@ -321,6 +321,61 @@ describe("MessageItem", () => {
     expect(screen.getByRole("option").className).toContain("message-list-row--unread");
   });
 
+  it("marks an unread row in the list's own gutter, not after the sender", () => {
+    render(
+      <MessageItem
+        message={makeMessage({ is_read: false })}
+        isSelected={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    const dot = screen.getByRole("option").querySelector(".message-row-unread-dot") as HTMLElement;
+    const head = dot.parentElement as HTMLElement;
+
+    // The marker is pinned to the row's head and drawn in its padding, so it
+    // forms a column down the list instead of trailing whatever width the
+    // sender's name happens to be.
+    expect(dot).toBeTruthy();
+    expect(dot.getAttribute("aria-hidden")).toBe("true");
+    expect(head.className).toContain("message-row-head");
+    // It sits beside the sender block rather than inside it, so the name can
+    // still ellipsize without dragging the marker along.
+    expect(dot.closest(".message-row-sender-name")).toBeNull();
+    expect(head.querySelector(".message-row-sender-name")).toBeTruthy();
+  });
+
+  it("carries the classes that let read mail recede behind unread mail", () => {
+    render(
+      <MessageItem
+        message={makeMessage({ is_read: false })}
+        isSelected={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByRole("option");
+
+    // Read rows step back to the secondary colour and unread rows step forward,
+    // which is the contrast that makes a list scannable rather than the marker
+    // on its own.
+    expect(row.querySelector(".message-row-sender-name")).toBeTruthy();
+    expect(row.querySelector(".message-row-subject")).toBeTruthy();
+    expect(row.querySelector(".message-row-date")).toBeTruthy();
+  });
+
+  it("leaves no unread marker on a read row", () => {
+    render(
+      <MessageItem
+        message={makeMessage({ is_read: true })}
+        isSelected={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option").querySelector(".message-row-unread-dot")).toBeNull();
+  });
+
   it("shows recipients as the primary contact in the sent folder", () => {
     render(
       <MessageItem
