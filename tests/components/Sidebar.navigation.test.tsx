@@ -150,6 +150,21 @@ describe("Sidebar navigation", () => {
     expect(sidebar.style.flexShrink).toBe("0");
   });
 
+  it("folds and unfolds the sidebar from the row that names the state", () => {
+    useUIStore.setState({ sidebarCollapsed: false });
+    const { unmount } = renderSidebar();
+
+    // The label states what the press will do, so the control is findable by
+    // name in both states — the rail keeps no room for a tooltip-only icon.
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(useUIStore.getState().sidebarCollapsed).toBe(true);
+
+    unmount();
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    expect(useUIStore.getState().sidebarCollapsed).toBe(false);
+  });
+
   it("uses non-submit buttons for bottom navigation actions", () => {
     renderSidebar();
 

@@ -16,6 +16,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import MarkAllReadButton from "./MarkAllReadButton";
 import { accountLabel, accountOptionLabel } from "../lib/accountIdentity";
+import { assignAccountColors, getAccountColor } from "../lib/accountColors";
 import { unreadCountForAccount } from "../hooks/queries/useAccountUnreadCounts";
 import { useReorderAccounts } from "../hooks/mutations";
 import { ALL_ACCOUNTS_SELECT_VALUE } from "../lib/folderAggregation";
@@ -34,10 +35,16 @@ interface Props {
   onSelect: (accountId: string | null) => void;
 }
 
-const AVATAR_SIZE = 24;
+const AVATAR_SIZE = 26;
+
+/** The collapsed rail is wider than the avatar needs, so the avatar grows with it. */
+const COLLAPSED_AVATAR_SIZE = 30;
 
 /** Counts above this read as `99+`, so the pill never grows past two digits. */
 const BADGE_CAP = 99;
+
+/** The same idea for the collapsed rail, where only one digit fits. */
+const COMPACT_BADGE_CAP = 9;
 
 /**
  * How far the pointer must travel before a press becomes a drag.
@@ -97,25 +104,34 @@ function initialOf(text: string): string {
   return trimmed ? trimmed.charAt(0).toUpperCase() : "?";
 }
 
-function formatUnread(count: number): string {
-  return count > BADGE_CAP ? `${BADGE_CAP}+` : String(count);
+function formatUnread(count: number, compact = false): string {
+  // The collapsed rail has no room for three digits, so the badge trades the
+  // exact number for staying inside the row. The full count is still in the
+  // row's accessible name and in the badge's tooltip.
+  const cap = compact ? COMPACT_BADGE_CAP : BADGE_CAP;
+  return count > cap ? `${cap}+` : String(count);
 }
 
-function avatarStyle(isActive: boolean, collapsed: boolean): React.CSSProperties {
+/**
+ * The mailbox monogram, tinted with the colour that account already carries in
+ * the message list. The tint is a mix rather than a solid fill so the avatar
+ * stays translucent over a wallpaper and the letter keeps its contrast.
+ */
+function avatarStyle(color: string, isActive: boolean, collapsed: boolean): React.CSSProperties {
+  const size = collapsed ? COLLAPSED_AVATAR_SIZE : AVATAR_SIZE;
   return {
-    width: collapsed ? 26 : AVATAR_SIZE,
-    height: collapsed ? 26 : AVATAR_SIZE,
+    width: size,
+    height: size,
     borderRadius: "50%",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
-    fontSize: collapsed ? 11 : 10,
+    fontSize: collapsed ? 12 : 10.5,
     fontWeight: 700,
-    backgroundColor: isActive
-      ? "color-mix(in srgb, var(--color-accent) 22%, transparent)"
-      : "color-mix(in srgb, var(--color-text-secondary) 14%, transparent)",
-    color: isActive ? "var(--color-accent)" : "var(--color-text-secondary)",
+    backgroundColor: `color-mix(in srgb, ${color} ${isActive ? 26 : 14}%, transparent)`,
+    color,
+    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${color} ${isActive ? 40 : 22}%, transparent)`,
   };
 }
 
@@ -129,28 +145,23 @@ function avatarStackStyle(): React.CSSProperties {
 }
 
 /**
- * The unread count, as a pill on the avatar.
+ * The unread count for a collapsed sidebar, as a pill on the avatar.
  *
- * A bare number at the far end of the row reads as one more trailing control
- * next to the mark-all-read action, and it disappears completely when the
- * sidebar is collapsed — which is when a mailbox's state is hardest to read any
- * other way. Pinning the count to the avatar keeps it attached to the mailbox
- * it belongs to at both widths.
- *
- * The 3px offset lets the pill overlap the avatar's corner while staying inside
- * the row's own padding, so the list keeps its current row spacing and nothing
- * clips against the row above.
+ * A collapsed row has no trailing edge to put a count on, and a mailbox's state
+ * is hardest to read there. Pinning the count to the avatar keeps it attached
+ * to the mailbox it belongs to. The ring lifts the pill off the monogram
+ * underneath it.
  */
 function unreadBadgeStyle(): React.CSSProperties {
   return {
     position: "absolute",
-    top: "-3px",
-    left: "-3px",
-    minWidth: "14px",
-    height: "14px",
+    bottom: "-2px",
+    right: "-3px",
+    minWidth: "15px",
+    height: "15px",
     padding: "0 4px",
     boxSizing: "border-box",
-    borderRadius: "7px",
+    borderRadius: "8px",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -161,6 +172,7 @@ function unreadBadgeStyle(): React.CSSProperties {
     lineHeight: 1,
     fontVariantNumeric: "tabular-nums",
     pointerEvents: "none",
+    boxShadow: "0 0 0 2px var(--color-sidebar-bg)",
   };
 }
 
@@ -168,6 +180,8 @@ function unreadBadgeStyle(): React.CSSProperties {
  * The count is hidden from assistive tech on purpose: the row's own accessible
  * name already spells out "3 unread", so announcing the pill as well would say
  * the same thing twice.
+ *
+ * This badge only ever rides a collapsed row, so it is always drawn compact.
  */
 function UnreadBadge({
   count,
@@ -180,7 +194,7 @@ function UnreadBadge({
 }) {
   return (
     <span data-testid={testId} title={title} aria-hidden="true" style={unreadBadgeStyle()}>
-      {formatUnread(count)}
+      {formatUnread(count, true)}
     </span>
   );
 }
@@ -194,6 +208,9 @@ function UnreadBadge({
  * two lines; unlabelled accounts show the address alone. The selected row also
  * carries the mark-all-read action, because that work belongs to one mailbox and
  * has no meaning for the combined view.
+ *
+ * Counts land in the same trailing column the folder list uses, so the two
+ * blocks read as one list and the numbers line up.
  */
 export default function SidebarAccountList({
   accounts,
@@ -218,34 +235,18 @@ export default function SidebarAccountList({
     0,
   );
 
-  function rowStyle(isActive: boolean): React.CSSProperties {
-    return {
-      display: "flex",
-      alignItems: "center",
-      gap: "2px",
-      borderRadius: "6px",
-      backgroundColor: isActive ? "var(--color-sidebar-active)" : "transparent",
-    };
+  /**
+   * Colours are handed out across the whole list, so two mailboxes never end up
+   * with the same one and the avatar matches the badge on the account's mail.
+   */
+  const colorsByAccountId = assignAccountColors(accounts);
+
+  function accountColorOf(account: Account): string {
+    return colorsByAccountId.get(account.id) ?? getAccountColor(account, account.id);
   }
 
-  function selectButtonStyle(isActive: boolean): React.CSSProperties {
-    return {
-      flex: 1,
-      minWidth: 0,
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: collapsed ? "5px" : "5px 8px",
-      justifyContent: collapsed ? "center" : "flex-start",
-      border: "none",
-      borderRadius: "6px",
-      backgroundColor: isActive ? "var(--color-sidebar-active)" : "transparent",
-      color: "var(--color-text-primary)",
-      fontSize: "12.5px",
-      textAlign: "left",
-      cursor: "pointer",
-      transition: "background-color 0.15s ease",
-    };
+  function buttonClass(collapsedRow: boolean): string {
+    return collapsedRow ? "sidebar-account-button sidebar-account-button--collapsed" : "sidebar-account-button";
   }
 
   /**
@@ -281,7 +282,7 @@ export default function SidebarAccountList({
       role="group"
       aria-label={t("settings.emailAccounts", "Email Accounts")}
       style={{
-        padding: collapsed ? "0 6px 6px" : "0 10px 8px",
+        padding: collapsed ? "4px 8px 6px" : "0 8px 2px",
         display: "flex",
         flexDirection: "column",
         gap: "2px",
@@ -292,13 +293,8 @@ export default function SidebarAccountList({
       {showAllRow && (
         <div
           data-testid="account-row-all"
-          style={rowStyle(allSelected)}
-          onMouseEnter={(e) => {
-            if (!allSelected) e.currentTarget.style.backgroundColor = "var(--color-sidebar-hover)";
-          }}
-          onMouseLeave={(e) => {
-            if (!allSelected) e.currentTarget.style.backgroundColor = "transparent";
-          }}
+          className="sidebar-account-row"
+          data-selected={allSelected ? "true" : undefined}
         >
           <button
             type="button"
@@ -306,13 +302,13 @@ export default function SidebarAccountList({
             aria-current={allSelected ? "true" : undefined}
             aria-label={collapsed ? allLabel : undefined}
             title={collapsed ? allLabel : undefined}
-            style={selectButtonStyle(allSelected)}
+            className={buttonClass(collapsed)}
           >
             <span style={avatarStackStyle()}>
-              <span style={avatarStyle(allSelected, collapsed)} aria-hidden="true">
+              <span style={avatarStyle("var(--color-accent)", allSelected, collapsed)} aria-hidden="true">
                 <Layers size={collapsed ? 14 : 12} />
               </span>
-              {allUnreadText && (
+              {collapsed && allUnreadText && (
                 <UnreadBadge
                   count={totalUnread}
                   testId="account-unread-all"
@@ -321,11 +317,16 @@ export default function SidebarAccountList({
               )}
             </span>
             {!collapsed && (
-              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span className="sidebar-row-label">
                 {t("sidebar.allAccounts", "All accounts")}
               </span>
             )}
           </button>
+          {!collapsed && (
+            <span className="sidebar-count-slot">
+              {allUnreadText && <span className="sidebar-count" data-testid="account-unread-all">{formatUnread(totalUnread)}</span>}
+            </span>
+          )}
         </div>
       )}
 
@@ -355,13 +356,8 @@ export default function SidebarAccountList({
               >
                 <div
                   data-testid={`account-row-${account.id}`}
-                  style={rowStyle(isActive)}
-                  onMouseEnter={(e) => {
-                    if (!isActive) e.currentTarget.style.backgroundColor = "var(--color-sidebar-hover)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isActive) e.currentTarget.style.backgroundColor = "transparent";
-                  }}
+                  className="sidebar-account-row"
+                  data-selected={isActive ? "true" : undefined}
                 >
                   <button
                     type="button"
@@ -369,13 +365,13 @@ export default function SidebarAccountList({
                     aria-current={isActive ? "true" : undefined}
                     aria-label={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
                     title={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
-                    style={selectButtonStyle(isActive)}
+                    className={buttonClass(collapsed)}
                   >
                     <span style={avatarStackStyle()}>
-                      <span style={avatarStyle(isActive, collapsed)} aria-hidden="true">
+                      <span style={avatarStyle(accountColorOf(account), isActive, collapsed)} aria-hidden="true">
                         {initialOf(label)}
                       </span>
-                      {unreadText && (
+                      {collapsed && unreadText && (
                         <UnreadBadge
                           count={unread}
                           testId={`account-unread-${account.id}`}
@@ -419,10 +415,28 @@ export default function SidebarAccountList({
                   {!collapsed && isActive && (
                     // A press on the action must not be read as picking up the row.
                     <span
+                      className="sidebar-row-action"
                       onPointerDown={(event) => event.stopPropagation()}
-                      style={{ display: "flex" }}
                     >
-                      <MarkAllReadButton accountId={account.id} accountLabel={full} unread={unread} />
+                      <MarkAllReadButton
+                        accountId={account.id}
+                        accountLabel={full}
+                        unread={unread}
+                        style={{ width: 22, height: 22, padding: 0, borderRadius: 6 }}
+                      />
+                    </span>
+                  )}
+                  {!collapsed && (
+                    <span className="sidebar-count-slot">
+                      {unreadText && (
+                        <span
+                          className="sidebar-count"
+                          data-testid={`account-unread-${account.id}`}
+                          title={unreadText}
+                        >
+                          {formatUnread(unread)}
+                        </span>
+                      )}
                     </span>
                   )}
                 </div>

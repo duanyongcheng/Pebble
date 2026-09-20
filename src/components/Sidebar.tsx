@@ -13,6 +13,9 @@ import {
   Clock,
   Star,
   ContactRound,
+  PanelLeftClose,
+  PanelLeftOpen,
+  type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../stores/ui.store";
@@ -20,6 +23,7 @@ import type { ActiveView } from "../stores/ui.store";
 import { isComposeDirty, useComposeStore } from "../stores/compose.store";
 import { useConfirmStore } from "../stores/confirm.store";
 import { useMailStore } from "../stores/mail.store";
+import { useShortcutStore } from "../stores/shortcut.store";
 import { useAccountsQuery, useFoldersForAccountsQuery } from "../hooks/queries";
 import { useFolderUnreadCountsForAccounts } from "../hooks/queries/useFolderUnreadCounts";
 import { useAccountUnreadCounts } from "../hooks/queries/useAccountUnreadCounts";
@@ -34,17 +38,25 @@ import type { Account, Folder as FolderType } from "../lib/api";
 const EMPTY_ACCOUNTS: Account[] = [];
 const EMPTY_FOLDERS: FolderType[] = [];
 
-const ROLE_ICONS: Record<string, React.ReactNode> = {
-  inbox: <Inbox size={16} />,
-  sent: <Send size={16} />,
-  drafts: <FileEdit size={16} />,
-  trash: <Trash2 size={16} />,
-  archive: <Archive size={16} />,
-  spam: <AlertTriangle size={16} />,
+const EXPANDED_WIDTH = 216;
+const COLLAPSED_WIDTH = 60;
+
+const ROLE_ICONS: Record<string, LucideIcon> = {
+  inbox: Inbox,
+  sent: Send,
+  drafts: FileEdit,
+  trash: Trash2,
+  archive: Archive,
+  spam: AlertTriangle,
 };
 
-function folderIcon(role: FolderType["role"]): React.ReactNode {
-  return (role && ROLE_ICONS[role]) || <Folder size={16} />;
+/** The rail has no labels, so its icons carry a little more of the row. */
+const ICON_SIZE = 16;
+const COLLAPSED_ICON_SIZE = 18;
+
+function folderIcon(role: FolderType["role"], size: number): React.ReactNode {
+  const Icon = (role && ROLE_ICONS[role]) || Folder;
+  return <Icon size={size} />;
 }
 
 // Default folders shown when no account is configured
@@ -69,6 +81,8 @@ export default function Sidebar() {
   const activeView = useUIStore((s) => s.activeView);
   const setActiveView = useUIStore((s) => s.setActiveView);
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const searchShortcut = useShortcutStore((s) => s.bindings["focus-search"]);
   const activeFolderId = useMailStore((s) => s.activeFolderId);
   const activeAccountId = useMailStore((s) => s.activeAccountId);
   const setActiveAccountId = useMailStore((s) => s.setActiveAccountId);
@@ -178,25 +192,18 @@ export default function Sidebar() {
     setActiveAccountId(accountId);
   }
 
-  const buttonBase: React.CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    borderRadius: "6px",
-    padding: sidebarCollapsed ? "7px" : "6px 10px",
-    width: "100%",
-    border: "none",
-    cursor: "pointer",
-    fontSize: "13px",
-    textAlign: "left",
-    justifyContent: sidebarCollapsed ? "center" : "flex-start",
-  };
+  const iconSize = sidebarCollapsed ? COLLAPSED_ICON_SIZE : ICON_SIZE;
+
+  const collapseLabel = sidebarCollapsed
+    ? t("sidebar.expand", "Expand sidebar")
+    : t("sidebar.collapse", "Collapse sidebar");
 
   return (
     <aside
       aria-label={t("sidebar.navigation", "Sidebar")}
+      className={`sidebar${sidebarCollapsed ? " sidebar--collapsed" : ""}`}
       style={{
-        width: sidebarCollapsed ? "48px" : "200px",
+        width: sidebarCollapsed ? `${COLLAPSED_WIDTH}px` : `${EXPANDED_WIDTH}px`,
         flexShrink: 0,
         backgroundColor: "var(--color-sidebar-bg)",
         borderRight: "1px solid var(--color-border)",
@@ -207,30 +214,25 @@ export default function Sidebar() {
         overflow: "hidden",
       }}
     >
-      {/* Search button */}
-      <nav aria-label={t("sidebar.search", "Search")} style={{ padding: "8px 6px 0", display: "flex", flexDirection: "column", gap: "1px" }}>
+      {/* Search. It reads as a field because it opens a view rather than
+          filtering the list in place, and it names the key that gets there. */}
+      <nav className="sidebar-nav sidebar-nav--top" aria-label={t("sidebar.search", "Search")}>
         <SidebarButton
-          icon={<Search size={16} />}
+          icon={<Search size={iconSize} />}
           label={t("search.title", "Search")}
           isActive={activeView === "search"}
           collapsed={sidebarCollapsed}
-          style={buttonBase}
+          className="sidebar-search"
+          trailing={!sidebarCollapsed && searchShortcut ? (
+            <kbd className="sidebar-kbd">{searchShortcut}</kbd>
+          ) : null}
           onClick={() => safeSetActiveView("search")}
         />
       </nav>
 
       {/* Section label */}
       {!sidebarCollapsed && (
-        <div style={{
-          padding: "12px 10px 4px 10px",
-          fontSize: "11px",
-          fontWeight: 600,
-          color: "var(--color-text-secondary)",
-          textTransform: "uppercase",
-          letterSpacing: "0.5px",
-        }}>
-          {t("sidebar.mail", "Mail")}
-        </div>
+        <div className="sidebar-section-label">{t("sidebar.mail", "Mail")}</div>
       )}
 
       {/* Account list. Every mailbox is listed at once, with its own unread
@@ -250,12 +252,11 @@ export default function Sidebar() {
 
       {/* Folders section */}
       <nav
-        className="scroll-region sidebar-folder-scroll"
+        className="scroll-region sidebar-folders"
         aria-label={t("sidebar.mailFolders", "Mail folders")}
         style={{
           flex: 1,
           overflowY: "auto",
-          padding: "0 6px",
           display: "flex",
           flexDirection: "column",
           gap: "1px",
@@ -268,11 +269,10 @@ export default function Sidebar() {
                 items.push(
                   <SidebarButton
                     key="__starred__"
-                    icon={<Star size={16} />}
+                    icon={<Star size={iconSize} />}
                     label={t("sidebar.starred", "Starred")}
                     isActive={activeView === "starred"}
                     collapsed={sidebarCollapsed}
-                    style={buttonBase}
                     onClick={() => safeSetActiveView("starred")}
                   />
                 );
@@ -281,12 +281,11 @@ export default function Sidebar() {
               items.push(
                 <SidebarButton
                   key={folder.id}
-                  icon={folderIcon(folder.role)}
+                  icon={folderIcon(folder.role, iconSize)}
                   label={folderLabel(folder)}
                   badge={showUnread ? unreadCountForFolder(folder.id, folders, unreadCounts) : undefined}
                   isActive={isActive}
                   collapsed={sidebarCollapsed}
-                  style={buttonBase}
                   onClick={() => handleFolderClick(folder.id)}
                 />
               );
@@ -298,11 +297,10 @@ export default function Sidebar() {
                 items.push(
                   <SidebarButton
                     key="__starred__"
-                    icon={<Star size={16} />}
+                    icon={<Star size={iconSize} />}
                     label={t("sidebar.starred", "Starred")}
                     isActive={activeView === "starred"}
                     collapsed={sidebarCollapsed}
-                    style={buttonBase}
                     onClick={() => safeSetActiveView("starred")}
                   />
                 );
@@ -310,11 +308,10 @@ export default function Sidebar() {
               items.push(
                 <SidebarButton
                   key={df.role}
-                  icon={ROLE_ICONS[df.role] || <Folder size={16} />}
+                  icon={folderIcon(df.role as FolderType["role"], iconSize)}
                   label={t(df.labelKey)}
                   isActive={index === 0 && activeView === "inbox"}
                   collapsed={sidebarCollapsed}
-                  style={buttonBase}
                   onClick={() => safeSetActiveView("inbox")}
                 />
               );
@@ -322,117 +319,98 @@ export default function Sidebar() {
             })}
       </nav>
 
-      {/* Divider */}
-      <div
-        style={{
-          height: "1px",
-          backgroundColor: "var(--color-border)",
-          margin: "0 6px",
-        }}
-      />
+      <div className="sidebar-divider" />
 
-      {/* Bottom nav: Contacts + Snoozed + Kanban + Settings */}
+      {/* Bottom nav: Contacts + Snoozed + Kanban + Settings, then the control
+          that folds the sidebar away. That control lives here rather than in a
+          header so it is still reachable once the labels are gone. */}
       <nav
+        className="sidebar-nav sidebar-nav--bottom"
         aria-label={t("sidebar.tools", "Tools")}
-        style={{
-          padding: "6px 6px 8px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "1px",
-        }}
       >
         <SidebarButton
-          icon={<ContactRound size={16} />}
+          icon={<ContactRound size={iconSize} />}
           label={t("sidebar.contacts", "Contacts")}
           isActive={activeView === "contacts"}
           collapsed={sidebarCollapsed}
-          style={buttonBase}
           onClick={() => safeSetActiveView("contacts")}
         />
         <SidebarButton
-          icon={<Clock size={16} />}
+          icon={<Clock size={iconSize} />}
           label={t("sidebar.snoozed", "Snoozed")}
           isActive={activeView === "snoozed"}
           collapsed={sidebarCollapsed}
-          style={buttonBase}
           onClick={() => safeSetActiveView("snoozed")}
         />
         <SidebarButton
-          icon={<LayoutGrid size={16} />}
+          icon={<LayoutGrid size={iconSize} />}
           label={t("sidebar.kanban", "Kanban")}
           isActive={activeView === "kanban"}
           collapsed={sidebarCollapsed}
-          style={buttonBase}
           onClick={() => safeSetActiveView("kanban")}
         />
         <SidebarButton
-          icon={<Settings size={16} />}
+          icon={<Settings size={iconSize} />}
           label={t("sidebar.settings", "Settings")}
           isActive={activeView === "settings"}
           collapsed={sidebarCollapsed}
-          style={buttonBase}
           onClick={() => safeSetActiveView("settings")}
+        />
+        <SidebarButton
+          icon={sidebarCollapsed ? <PanelLeftOpen size={iconSize} /> : <PanelLeftClose size={iconSize} />}
+          label={collapseLabel}
+          isActive={false}
+          collapsed={sidebarCollapsed}
+          onClick={toggleSidebar}
         />
       </nav>
     </aside>
   );
 }
 
-// Reusable sidebar button to avoid repetitive hover logic
+// Reusable sidebar row. Hover, selection and focus come from `.sidebar-row`, so
+// every destination in the sidebar behaves the same way.
 function SidebarButton({
-  icon, label, badge, isActive, collapsed, style, disabled, onClick,
+  icon, label, badge, isActive, collapsed, onClick, disabled, className, trailing,
 }: {
   icon: React.ReactNode;
   label: string;
   badge?: number;
   isActive: boolean;
   collapsed: boolean;
-  style: React.CSSProperties;
-  disabled?: boolean;
   onClick: () => void;
+  disabled?: boolean;
+  /** Extra class for rows that need their own surface, such as search. */
+  className?: string;
+  /** Rendered after the label, before the count. */
+  trailing?: React.ReactNode;
 }) {
+  const classes = ["sidebar-row"];
+  if (collapsed) classes.push("sidebar-row--collapsed");
+  if (className) classes.push(className);
+
   return (
     <button
       type="button"
+      className={classes.join(" ")}
       onClick={onClick}
       aria-label={collapsed ? label : undefined}
       aria-current={isActive ? "page" : undefined}
+      data-selected={isActive ? "true" : undefined}
       title={collapsed ? label : undefined}
       disabled={disabled}
-      style={{
-        ...style,
-        backgroundColor: isActive
-          ? "var(--color-sidebar-active)"
-          : style.backgroundColor ?? "transparent",
-        color: style.color ?? "var(--color-text-primary)",
-        opacity: disabled ? 0.45 : 1,
-        cursor: disabled ? "default" : "pointer",
-        transition: "background-color 0.15s ease, opacity 0.15s ease",
-      }}
-      onMouseEnter={(e) => {
-        if (!isActive && !style.backgroundColor)
-          e.currentTarget.style.backgroundColor = "var(--color-sidebar-hover)";
-      }}
-      onMouseLeave={(e) => {
-        if (!isActive && !style.backgroundColor)
-          e.currentTarget.style.backgroundColor = "transparent";
-      }}
     >
-      {icon}
-      {!collapsed && (
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-          {label}
-        </span>
-      )}
-      {!collapsed && badge != null && badge > 0 && (
-        <span style={{
-          fontSize: "11px",
-          fontWeight: 600,
-          color: "var(--color-accent)",
-          minWidth: "18px",
-          textAlign: "right",
-        }}>
-          {badge}
+      <span className="sidebar-row-icon">
+        {icon}
+        {/* With the labels gone the count has nowhere to go, so a dot carries
+            the one bit that still matters: this folder has mail waiting. */}
+        {collapsed && badge != null && badge > 0 && <span className="sidebar-unread-dot" />}
+      </span>
+      {!collapsed && <span className="sidebar-row-label">{label}</span>}
+      {!collapsed && trailing}
+      {!collapsed && !trailing && (
+        <span className="sidebar-count-slot">
+          {badge != null && badge > 0 && <span className="sidebar-count">{badge}</span>}
         </span>
       )}
     </button>

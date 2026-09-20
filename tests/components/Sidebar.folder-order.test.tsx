@@ -196,19 +196,25 @@ describe("Sidebar folder order", () => {
     renderSidebar();
 
     // Nothing here may paint an opaque panel over the wallpaper: the list keeps
-    // its own background off and every row is either transparent or themed via
-    // `--color-sidebar-active`, which `.app-shell--with-background` already makes
-    // translucent for the sidebar as a whole.
+    // its own background off and every row takes its surface from
+    // `.sidebar-account-row`, which is transparent unless selected and themed
+    // via `--color-sidebar-active` — a token `.app-shell--with-background`
+    // already makes translucent for the sidebar as a whole.
     const list = screen.getByTestId("account-list");
     expect(list.getAttribute("style") ?? "").not.toContain("--color-bg");
 
     const row = screen.getByTestId("account-row-account-1");
     const rowStyle = row.getAttribute("style") ?? "";
-    expect(rowStyle).toContain("background-color: transparent");
+    expect(row.className).toContain("sidebar-account-row");
+    expect(rowStyle).not.toContain("background");
     expect(rowStyle).not.toContain("--color-bg");
 
-    // The avatar is tinted from `--color-text-secondary` mixed with transparent.
+    // The avatar is the account's own colour mixed with transparent, so the
+    // wallpaper still reads through it.
     const avatar = row.querySelector("span[aria-hidden='true']");
-    expect(avatar?.getAttribute("style") ?? "").toContain("14%, transparent");
+    const avatarStyle = avatar?.getAttribute("style") ?? "";
+    expect(avatarStyle).toContain("color-mix");
+    expect(avatarStyle).toContain("14%, transparent");
+    expect(avatarStyle).not.toContain("--color-bg");
   });
 });

@@ -57,7 +57,9 @@
     "tools": "工具",
     "allAccounts": "全部邮箱",
     "unreadCount": "{{count}} 封未读",
-    "unreadCount_other": "{{count}} 封未读"
+    "unreadCount_other": "{{count}} 封未读",
+    "collapse": "收起侧边栏",
+    "expand": "展开侧边栏"
   },
   "inbox": {
     "searchPlaceholder": "搜索邮件...",

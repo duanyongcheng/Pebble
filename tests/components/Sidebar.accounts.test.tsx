@@ -271,22 +271,40 @@ describe("Sidebar account list", () => {
     expect(screen.getByLabelText("me@icloud.com")).toBeTruthy();
   });
 
-  it("pins the unread count to the avatar's corner", () => {
+  it("keeps the unread count in the sidebar's trailing column", () => {
     mocks.counts = { "account-work": 3 };
     useUIStore.setState({ showFolderUnreadCount: true });
     renderSidebar();
 
     const badge = screen.getByTestId("account-unread-account-work");
-    // Overlaid on the avatar rather than laid out beside the address, so mail
-    // arriving never shifts the label.
+    // Laid out in the same slot the folder counts use, so the numbers line up
+    // down the sidebar and a count arriving never re-flows the address beside
+    // it — the slot is reserved whether or not it holds a number.
+    expect(badge.className).toContain("sidebar-count");
+    expect(badge.closest(".sidebar-count-slot")).toBeTruthy();
+    expect(badge.style.position).not.toBe("absolute");
+
+    const row = screen.getByTestId("account-row-account-work");
+    const avatar = row.querySelector("span[aria-hidden='true']") as HTMLElement;
+    expect(avatar.style.borderRadius).toBe("50%");
+
+    // Stated once: the avatar no longer repeats the number.
+    expect(row.textContent?.match(/3/g)).toHaveLength(1);
+    // A mailbox with nothing waiting gets no badge at all.
+    expect(screen.queryByTestId("account-unread-account-personal")).toBeNull();
+  });
+
+  it("pins the count to the avatar once the rail has no trailing column", () => {
+    mocks.counts = { "account-work": 3 };
+    useUIStore.setState({ showFolderUnreadCount: true, sidebarCollapsed: true });
+    renderSidebar();
+
+    const badge = screen.getByTestId("account-unread-account-work");
+    // The collapsed rail is too narrow for a trailing count, so it rides the
+    // avatar instead of disappearing.
     expect(badge.style.position).toBe("absolute");
     const avatar = badge.parentElement?.firstElementChild as HTMLElement;
     expect(avatar.style.borderRadius).toBe("50%");
-
-    // Stated once: the row no longer repeats the number at its far end.
-    expect(screen.getByTestId("account-row-account-work").textContent?.match(/3/g)).toHaveLength(1);
-    // A mailbox with nothing waiting gets no badge at all.
-    expect(screen.queryByTestId("account-unread-account-personal")).toBeNull();
   });
 
   it("keeps counting while the sidebar is collapsed", () => {

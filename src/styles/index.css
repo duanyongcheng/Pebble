@@ -146,6 +146,267 @@ option {
   color: var(--color-text-primary);
 }
 
+/* Sidebar rows.
+   Folders, tools and mailboxes all wear the same row so the column reads as one
+   list. Hover, selection and keyboard focus live here instead of in per-element
+   mouse handlers: every row then reacts identically, the selected row is marked
+   by its accent icon rather than by a second colour, and focus stays visible. */
+.sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-row:hover {
+  background-color: var(--color-sidebar-hover);
+}
+
+.sidebar-row:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.sidebar-row[data-selected="true"] {
+  background-color: var(--color-sidebar-active);
+  font-weight: 600;
+}
+
+/* The icon carries the selection colour so the row does not need a second
+   background, which keeps it in step with the message list's selected row. */
+.sidebar-row[data-selected="true"] .sidebar-row-icon {
+  color: var(--color-accent);
+}
+
+.sidebar-row:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.sidebar-row--collapsed {
+  justify-content: center;
+  padding: 7px;
+}
+
+.sidebar-row-icon {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  transition: color 120ms ease;
+}
+
+/* Stands in for the count while the sidebar is collapsed. */
+.sidebar-unread-dot {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-accent);
+}
+
+.sidebar-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unread counts sit in a fixed slot at the trailing edge, so every count lines
+   up in one column and a count arriving never re-flows the label beside it. */
+.sidebar-count-slot {
+  flex-shrink: 0;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.sidebar-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* On the selected row the pill inverts, so the count stays legible against the
+   selection fill instead of blending into it. */
+.sidebar-row[data-selected="true"] .sidebar-count,
+.sidebar-account-row[data-selected="true"] .sidebar-count {
+  background-color: var(--color-accent);
+  color: #ffffff;
+}
+
+/* The search row reads as a field rather than one more destination, and shows
+   the key that focuses it. */
+.sidebar-search {
+  background-color: color-mix(in srgb, var(--color-text-secondary) 9%, transparent);
+  color: var(--color-text-secondary);
+}
+
+.sidebar-search:hover {
+  background-color: color-mix(in srgb, var(--color-text-secondary) 14%, transparent);
+}
+
+.sidebar-search[data-selected="true"] {
+  background-color: var(--color-sidebar-active);
+  color: var(--color-text-primary);
+}
+
+.sidebar-kbd {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background-color: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.sidebar-section-label {
+  padding: 14px 10px 5px;
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 8px;
+}
+
+/* Softer than a full-strength border: it separates the tools from the mailbox
+   list without drawing a second edge inside an already bordered panel. */
+.sidebar-divider {
+  height: 1px;
+  margin: 5px 10px;
+  background-color: color-mix(in srgb, var(--color-border) 75%, transparent);
+}
+
+.sidebar-nav--top {
+  padding-top: 8px;
+}
+
+.sidebar-nav--bottom {
+  padding-bottom: 8px;
+}
+
+/* The folder list is the only part that scrolls, so it owns the leftover
+   height. With the labels gone it starts a little lower, which is what keeps
+   the account avatars from crowding the search field. */
+.sidebar-folders {
+  padding: 0 8px;
+}
+
+.sidebar--collapsed .sidebar-folders {
+  padding-top: 4px;
+}
+
+/* Mailbox rows. The whole row is the hit target; the label block beside the
+   avatar keeps its own button so the row can also carry an action. */
+.sidebar-account-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 8px;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.sidebar-account-row:hover {
+  background-color: var(--color-sidebar-hover);
+}
+
+.sidebar-account-row[data-selected="true"] {
+  background-color: var(--color-sidebar-active);
+}
+
+.sidebar-account-button {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  /* The inset and the gap are what put a 26px avatar's centre on the same
+     column as a folder's 16px icon, and the address on the same column as a
+     folder's label. The row carries the surface, so the asymmetric inset is
+     invisible until the row takes keyboard focus. */
+  gap: 5px;
+  padding: 5px 6px 5px 3px;
+  border: 0;
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-account-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.sidebar-account-button--collapsed {
+  justify-content: center;
+  padding: 6px;
+}
+
+/* The row's own action, kept out of the label's width so the count column to
+   its right stays put. */
+.sidebar-row-action {
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* Over a wallpaper the panel itself is already translucent, so an opaque
+   selection fill would punch a solid hole in it. */
+.app-shell--with-background .sidebar-row[data-selected="true"],
+.app-shell--with-background .sidebar-account-row[data-selected="true"] {
+  background-color: color-mix(in srgb, var(--color-sidebar-active) 62%, transparent);
+}
+
+.app-shell--with-background .sidebar-row:hover,
+.app-shell--with-background .sidebar-account-row:hover {
+  background-color: color-mix(in srgb, var(--color-sidebar-hover) 70%, transparent);
+}
+
+.sidebar-avatar {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
 /* Themed scrollbars for scrollable panes. Keeps the gutter stable so content
    does not shift when a scrollbar appears after message content loads. */
 .scroll-region {

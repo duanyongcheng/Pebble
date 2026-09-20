@@ -57,7 +57,9 @@
     "tools": "Tools",
     "allAccounts": "All accounts",
     "unreadCount": "{{count}} unread",
-    "unreadCount_other": "{{count}} unread"
+    "unreadCount_other": "{{count}} unread",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar"
   },
   "inbox": {
     "searchPlaceholder": "Search messages...",
