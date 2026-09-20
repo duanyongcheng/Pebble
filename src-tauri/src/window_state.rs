@@ -14,7 +14,7 @@
 //! wrong corner.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -206,12 +206,11 @@ pub fn watch(app_data_dir: &Path) -> WindowState {
         .spawn(move || {
             while let Ok(mut latest) = receiver.recv() {
                 // Hold on to the newest geometry until the window stops moving,
-                // so a drag costs one write rather than one per frame.
-                loop {
-                    match receiver.recv_timeout(SETTLE) {
-                        Ok(next) => latest = next,
-                        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
-                    }
+                // so a drag costs one write rather than one per frame. A timeout
+                // and a closed channel mean the same thing here — nothing newer
+                // is coming — so both end the drain.
+                while let Ok(next) = receiver.recv_timeout(SETTLE) {
+                    latest = next;
                 }
                 if let Err(e) = store(&writer_path, &latest) {
                     tracing::warn!("Failed to save the window geometry: {e}");
