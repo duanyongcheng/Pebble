@@ -926,6 +926,19 @@ pub async fn list_accounts(
     state.store.list_accounts()
 }
 
+/// Save the user's account order.
+///
+/// The whole list arrives at once, in display order. A per-account "move"
+/// command would have to renumber the neighbours itself, and two of those
+/// arriving out of order would leave a duplicate position behind.
+#[tauri::command]
+pub async fn reorder_accounts(
+    state: State<'_, AppState>,
+    account_ids: Vec<String>,
+) -> std::result::Result<(), PebbleError> {
+    state.store.reorder_accounts(&account_ids)
+}
+
 #[tauri::command]
 pub async fn delete_account(
     state: State<'_, AppState>,

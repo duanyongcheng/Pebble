@@ -239,6 +239,16 @@ export async function listAccounts(): Promise<Account[]> {
   return invoke<Account[]>("list_accounts");
 }
 
+/**
+ * Save the account order shown in the sidebar.
+ *
+ * The whole list goes over in display order; the backend treats it as a
+ * preference, so a list that went stale still saves.
+ */
+export async function reorderAccounts(accountIds: string[]): Promise<void> {
+  return invoke<void>("reorder_accounts", { accountIds });
+}
+
 export async function updateAccount(
   accountId: string,
   email: string,

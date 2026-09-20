@@ -1,10 +1,24 @@
 import { render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "../../src/components/Sidebar";
 import { useComposeStore } from "../../src/stores/compose.store";
 import { useMailStore } from "../../src/stores/mail.store";
 import { useUIStore } from "../../src/stores/ui.store";
 import type { Folder } from "../../src/lib/api";
+
+/**
+ * Dragging an account row saves through react-query, so the sidebar needs a
+ * client even in a test that stubs the queries themselves.
+ */
+function renderSidebar() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return render(<Sidebar />, { wrapper });
+}
 
 const mocks = vi.hoisted(() => ({
   accounts: [{
@@ -131,7 +145,7 @@ describe("Sidebar folder order", () => {
   });
 
   it("uses the same system folder order for a single account as all accounts", () => {
-    render(<Sidebar />);
+    renderSidebar();
 
     const folderNav = screen.getByRole("navigation", { name: "Mail folders" });
     const labels = within(folderNav).getAllByRole("button").map((button) => button.textContent);
@@ -179,7 +193,7 @@ describe("Sidebar folder order", () => {
       },
     });
 
-    render(<Sidebar />);
+    renderSidebar();
 
     // Nothing here may paint an opaque panel over the wallpaper: the list keeps
     // its own background off and every row is either transparent or themed via

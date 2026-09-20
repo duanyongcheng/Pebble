@@ -567,6 +567,7 @@ pub fn run() {
             commands::accounts::update_account_proxy_setting,
             commands::accounts::update_account,
             commands::accounts::list_accounts,
+            commands::accounts::reorder_accounts,
             commands::accounts::delete_account,
             commands::accounts::test_imap_connection,
             commands::accounts::test_pop3_connection,

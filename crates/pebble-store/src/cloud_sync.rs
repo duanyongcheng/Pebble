@@ -326,6 +326,9 @@ impl Store {
     /// Export settings (accounts without passwords, rules, kanban cards, contacts, translate config) as JSON bytes.
     pub fn export_settings(&self) -> Result<Vec<u8>> {
         let accounts = self.list_accounts()?;
+        // The array is written in display order, and a restore re-applies that
+        // order. Sorting this list for readability would silently reshuffle the
+        // user's sidebar and change the account new mail is composed from.
         let account_backups: Vec<AccountBackup> = accounts
             .into_iter()
             .map(|a| AccountBackup {
@@ -443,6 +446,14 @@ impl Store {
                 }
             }
 
+            // Restoring settings restores the account order too. Applying the
+            // backup's array order (rather than trusting per-row positions) also
+            // keeps a partial backup from leaving restored accounts tied with
+            // local ones the file never mentioned.
+            let restored_order: Vec<String> =
+                backup.accounts.iter().map(|ab| ab.id.clone()).collect();
+            crate::accounts::apply_account_order(&tx, &restored_order)?;
+
             // Replace rules atomically — delete existing, then insert from backup
             tx.execute("DELETE FROM rules", [])
                 .map_err(|e| PebbleError::Storage(e.to_string()))?;
@@ -554,6 +565,12 @@ impl Store {
                     .map_err(|e| PebbleError::Storage(e.to_string()))?;
                 }
             }
+
+            // Same as `import_settings`: the backup's array order is the order
+            // the user arranged their accounts in.
+            let restored_order: Vec<String> =
+                backup.accounts.iter().map(|ab| ab.id.clone()).collect();
+            crate::accounts::apply_account_order(&tx, &restored_order)?;
 
             tx.execute("DELETE FROM rules", [])
                 .map_err(|e| PebbleError::Storage(e.to_string()))?;

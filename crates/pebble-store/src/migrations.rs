@@ -2,7 +2,7 @@ use pebble_core::{build_snippet, PebbleError, Result};
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashSet;
 
-const CURRENT_VERSION: u32 = 19;
+const CURRENT_VERSION: u32 = 20;
 const ACCOUNT_COLOR_PRESETS: [&str; 12] = [
     "#0ea5e9", "#22c55e", "#f59e0b", "#8b5cf6", "#f43f5e", "#14b8a6", "#6366f1", "#f97316",
     "#06b6d4", "#ec4899", "#84cc16", "#3b82f6",
@@ -39,6 +39,46 @@ fn derive_account_color(seed: &str) -> String {
         hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
     }
     ACCOUNT_COLOR_PRESETS[(hash as usize) % ACCOUNT_COLOR_PRESETS.len()].to_string()
+}
+
+/// Give every account a sort position that reproduces the order it already had.
+///
+/// Accounts used to be listed by `created_at` alone, so stamping row numbers
+/// from that same order means an upgrade reshuffles nothing. That matters more
+/// than it looks: the first account is the one new mail is composed from while
+/// the combined mailbox is selected, so a migration that reordered them would
+/// quietly change who the next message is sent as.
+///
+/// `created_at` is probed rather than assumed because the lightweight fixtures
+/// in the migration tests create an `accounts` table with only a few columns.
+fn backfill_account_sort_order(conn: &Connection) -> Result<()> {
+    let has_created_at = conn
+        .prepare("SELECT created_at FROM accounts LIMIT 0")
+        .is_ok();
+    let order_by = if has_created_at {
+        "ORDER BY created_at ASC, id ASC"
+    } else {
+        "ORDER BY id ASC"
+    };
+
+    let account_ids: Vec<String> = {
+        let mut stmt = conn.prepare(&format!("SELECT id FROM accounts {order_by}"))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        ids
+    };
+
+    for (position, id) in account_ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE accounts SET sort_order = ?1 WHERE id = ?2",
+            rusqlite::params![position as i32, id],
+        )?;
+    }
+
+    Ok(())
 }
 
 fn backfill_account_colors(conn: &Connection) -> Result<()> {
@@ -998,6 +1038,26 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         tx.commit()?;
     }
 
+    // Accounts became user-orderable, so they carry an explicit position. The
+    // column is backfilled instead of being left at its default: every account
+    // would otherwise share position 0 and the list would fall back to an
+    // arbitrary order.
+    //
+    // Stamp V20's own number rather than `CURRENT_VERSION`: a crash between this
+    // block and a future V21 must not be recorded as fully migrated.
+    if version < 20 {
+        let tx = conn.unchecked_transaction()?;
+        // Lightweight migration fixtures may intentionally omit accounts.
+        if table_exists(&tx, "accounts")? {
+            tx.execute_batch(
+                "ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            backfill_account_sort_order(&tx)?;
+        }
+        set_schema_version(&tx, 20)?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -1242,6 +1302,61 @@ mod tests {
             unknown_provider.is_err(),
             "ai_config must reject provider types the app cannot talk to"
         );
+    }
+
+    /// The order an existing user already sees must survive the upgrade.
+    ///
+    /// Before V20 the list came from `created_at` alone, and the first account
+    /// is the default sender for new mail — so a migration that reshuffled
+    /// accounts would quietly change who the next message is sent as.
+    #[test]
+    fn migration_v20_backfills_the_order_accounts_already_had() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE accounts (
+                 id TEXT PRIMARY KEY,
+                 email TEXT,
+                 display_name TEXT,
+                 auth_data BLOB,
+                 created_at INTEGER NOT NULL
+             );
+             -- Inserted newest first, so insertion order cannot be mistaken for
+             -- the order the old query produced.
+             INSERT INTO accounts VALUES ('newest', 'c@example.com', 'C', NULL, 300);
+             INSERT INTO accounts VALUES ('oldest', 'a@example.com', 'A', NULL, 100);
+             INSERT INTO accounts VALUES ('middle', 'b@example.com', 'B', NULL, 200);
+             PRAGMA user_version=19;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_VERSION);
+
+        let mut stmt = conn
+            .prepare("SELECT id FROM accounts ORDER BY sort_order ASC")
+            .expect("V20 must have added a sort_order column");
+        let ordered: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(ordered, ["oldest", "middle", "newest"]);
+
+        // A re-run must not move anything: the app calls this on every launch.
+        run_migrations(&conn).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id FROM accounts ORDER BY sort_order ASC")
+            .unwrap();
+        let after_rerun: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+        assert_eq!(after_rerun, ordered);
     }
 
     #[test]

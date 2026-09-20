@@ -1,6 +1,7 @@
 use pebble_core::{Account, PebbleError, ProviderType, Result};
-use rusqlite::{self, OptionalExtension};
+use rusqlite::{self, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::Store;
 
@@ -14,6 +15,55 @@ pub fn normalize_account_label(label: Option<&str>) -> Result<Option<String>> {
         ));
     }
     Ok((!label.trim().is_empty()).then(|| label.trim().to_owned()))
+}
+
+/// Rewrite `sort_order` so the accounts follow `ordered_ids`.
+///
+/// Callers hand over a whole list in display order rather than a single move
+/// because that is the only shape that cannot tear: one transaction either
+/// writes the new order or leaves the old one untouched.
+///
+/// The list is treated as a preference, not a contract. Ids that no longer
+/// exist are dropped and duplicates collapse to their first mention, so a
+/// settings panel that went stale — an account was added or removed in another
+/// window — still saves instead of failing the user's click. Accounts the list
+/// does not mention keep their previous relative order behind the mentioned
+/// ones, which is what a partial list means in practice.
+pub(crate) fn apply_account_order(conn: &Connection, ordered_ids: &[String]) -> Result<()> {
+    let existing: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM accounts ORDER BY sort_order ASC, created_at ASC, id ASC")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        ids
+    };
+
+    let known: HashSet<&str> = existing.iter().map(String::as_str).collect();
+    let mut ordered: Vec<String> = Vec::with_capacity(existing.len());
+    for id in ordered_ids {
+        if known.contains(id.as_str()) && !ordered.iter().any(|kept| kept == id) {
+            ordered.push(id.clone());
+        }
+    }
+    let mut unmentioned: Vec<String> = Vec::new();
+    for id in existing {
+        if !ordered.contains(&id) {
+            unmentioned.push(id);
+        }
+    }
+    ordered.extend(unmentioned);
+
+    for (position, id) in ordered.iter().enumerate() {
+        conn.execute(
+            "UPDATE accounts SET sort_order = ?1 WHERE id = ?2",
+            rusqlite::params![position as i32, id],
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Typed view over an account's `sync_state` JSON blob.
@@ -99,9 +149,13 @@ impl Store {
     pub fn insert_account(&self, account: &Account) -> Result<()> {
         let account_label = normalize_account_label(account.account_label.as_deref())?;
         self.with_write(|conn| {
+            // A new account joins the end of the user's order. Leaving it at the
+            // column default would push it to the front of the sidebar and make
+            // it the account the next message is composed from.
             conn.execute(
-                "INSERT INTO accounts (id, email, display_name, color, provider, created_at, updated_at, account_label, provider_display_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO accounts (id, email, display_name, color, provider, created_at, updated_at, account_label, provider_display_name, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                         (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts))",
                 rusqlite::params![
                     account.id,
                     account.email,
@@ -114,6 +168,16 @@ impl Store {
                     account.provider_display_name.as_deref(),
                 ],
             )?;
+            Ok(())
+        })
+    }
+
+    /// Persist the user's account order. See [`apply_account_order`].
+    pub fn reorder_accounts(&self, account_ids: &[String]) -> Result<()> {
+        self.with_write(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            apply_account_order(&tx, account_ids)?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -245,11 +309,17 @@ impl Store {
         })
     }
 
+    /// Every account, in the order the user arranged them.
+    ///
+    /// The first entry is the app's default sender — the address a new message
+    /// goes out from while the combined "all accounts" mailbox is selected — so
+    /// this order is a preference, not a display detail. `created_at` and `id`
+    /// only break ties left behind by a row that never got a position.
     pub fn list_accounts(&self) -> Result<Vec<Account>> {
         self.with_read(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, email, display_name, color, provider, created_at, updated_at, account_label, provider_display_name
-                     FROM accounts ORDER BY created_at ASC",
+                     FROM accounts ORDER BY sort_order ASC, created_at ASC, id ASC",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(Account {
@@ -652,6 +722,151 @@ mod cursor_tests {
         let updated = store.get_account(&account.id).unwrap().unwrap();
         assert_eq!(updated.email, "renamed@example.com");
         assert_eq!(updated.color.as_deref(), Some("#f97316"));
+    }
+
+    /// Accounts are compared by id only; `created_at` is deliberately identical
+    /// so a test can never pass because of a timestamp tie-break.
+    fn account_with_id(id: &str) -> Account {
+        Account {
+            account_label: Some(id.to_string()),
+            provider_display_name: None,
+            id: id.to_string(),
+            email: format!("{id}@example.com"),
+            display_name: id.to_string(),
+            color: None,
+            provider: ProviderType::Imap,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn ordered_ids(store: &Store) -> Vec<String> {
+        store
+            .list_accounts()
+            .unwrap()
+            .into_iter()
+            .map(|account| account.id)
+            .collect()
+    }
+
+    #[test]
+    fn a_new_account_joins_the_end_of_the_user_order() {
+        let store = Store::open_in_memory().unwrap();
+        for id in ["first", "second"] {
+            store.insert_account(&account_with_id(id)).unwrap();
+        }
+        store
+            .reorder_accounts(&["second".into(), "first".into()])
+            .unwrap();
+
+        store.insert_account(&account_with_id("third")).unwrap();
+
+        assert_eq!(ordered_ids(&store), ["second", "first", "third"]);
+    }
+
+    #[test]
+    fn reorder_accounts_persists_the_given_order() {
+        let store = Store::open_in_memory().unwrap();
+        for id in ["a", "b", "c"] {
+            store.insert_account(&account_with_id(id)).unwrap();
+        }
+
+        store
+            .reorder_accounts(&["c".into(), "a".into(), "b".into()])
+            .unwrap();
+
+        assert_eq!(ordered_ids(&store), ["c", "a", "b"]);
+
+        // The stored positions are what persist; the list order is derived from
+        // them, so assert the column itself rather than the same query twice.
+        let positions: Vec<i32> = store
+            .with_read(|conn| {
+                let mut stmt = conn.prepare("SELECT sort_order FROM accounts ORDER BY id ASC")?;
+                let rows = stmt.query_map([], |row| row.get::<_, i32>(0))?;
+                let mut values = Vec::new();
+                for row in rows {
+                    values.push(row?);
+                }
+                Ok(values)
+            })
+            .unwrap();
+        assert_eq!(positions, [1, 2, 0]);
+    }
+
+    #[test]
+    fn reorder_treats_a_stale_list_as_a_preference() {
+        let store = Store::open_in_memory().unwrap();
+        for id in ["a", "b", "c"] {
+            store.insert_account(&account_with_id(id)).unwrap();
+        }
+
+        // "b" is repeated, "ghost" was deleted in another window, and "c" is
+        // missing entirely — the same shape a settings panel goes stale in.
+        store
+            .reorder_accounts(&["b".into(), "ghost".into(), "b".into(), "a".into()])
+            .unwrap();
+
+        // Mentioned accounts come first in the order given; the one the caller
+        // forgot keeps its place behind them instead of failing the save.
+        assert_eq!(ordered_ids(&store), ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn reorder_with_an_empty_list_leaves_the_order_alone() {
+        let store = Store::open_in_memory().unwrap();
+        for id in ["a", "b"] {
+            store.insert_account(&account_with_id(id)).unwrap();
+        }
+
+        store.reorder_accounts(&[]).unwrap();
+
+        assert_eq!(ordered_ids(&store), ["a", "b"]);
+    }
+
+    #[test]
+    fn backup_round_trip_keeps_the_account_order() {
+        let store = Store::open_in_memory().unwrap();
+        for id in ["a", "b", "c"] {
+            store.insert_account(&account_with_id(id)).unwrap();
+        }
+        store
+            .reorder_accounts(&["c".into(), "b".into(), "a".into()])
+            .unwrap();
+
+        let restored = Store::open_in_memory().unwrap();
+        restored
+            .import_settings(&store.export_settings().unwrap())
+            .unwrap();
+
+        assert_eq!(ordered_ids(&restored), ["c", "b", "a"]);
+    }
+
+    #[test]
+    fn restoring_a_partial_backup_puts_its_accounts_first_without_ties() {
+        let store = Store::open_in_memory().unwrap();
+        for id in ["a", "b", "c"] {
+            store.insert_account(&account_with_id(id)).unwrap();
+        }
+        store
+            .reorder_accounts(&["c".into(), "b".into(), "a".into()])
+            .unwrap();
+
+        // A backup that only knows about "a", restored onto a machine that
+        // already holds all three: the accounts the file does not mention must
+        // keep their relative order behind it, and no two rows may end up
+        // sharing a position.
+        let mut backup: serde_json::Value =
+            serde_json::from_slice(&store.export_settings().unwrap()).unwrap();
+        backup["accounts"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|account| account["id"] == "a");
+
+        store
+            .import_settings(&serde_json::to_vec(&backup).unwrap())
+            .unwrap();
+
+        assert_eq!(ordered_ids(&store), ["a", "c", "b"]);
     }
 }
 

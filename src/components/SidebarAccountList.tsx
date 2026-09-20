@@ -1,8 +1,23 @@
 import { useTranslation } from "react-i18next";
 import { Layers } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import MarkAllReadButton from "./MarkAllReadButton";
 import { accountLabel, accountOptionLabel } from "../lib/accountIdentity";
 import { unreadCountForAccount } from "../hooks/queries/useAccountUnreadCounts";
+import { useReorderAccounts } from "../hooks/mutations";
 import { ALL_ACCOUNTS_SELECT_VALUE } from "../lib/folderAggregation";
 import type { Account } from "../lib/api";
 
@@ -23,6 +38,59 @@ const AVATAR_SIZE = 24;
 
 /** Counts above this read as `99+`, so the pill never grows past two digits. */
 const BADGE_CAP = 99;
+
+/**
+ * How far the pointer must travel before a press becomes a drag.
+ *
+ * The row is also the button that selects a mailbox, so the two gestures share
+ * one press: below this distance nothing moves and the click lands, above it
+ * the row is picked up. Five pixels is the same threshold the kanban board uses
+ * for its cards.
+ */
+const DRAG_ACTIVATION_DISTANCE = 5;
+
+/**
+ * One draggable account row.
+ *
+ * The whole row is the drag surface rather than a handle, because the list is
+ * short and the label is the obvious thing to grab. The gesture is pointer-only
+ * on purpose: dnd-kit's keyboard sensor needs `role="button"` and a tab stop on
+ * this wrapper, which would nest the row's own select button inside a second
+ * button, and a keyboard user already has the arrows in Settings › Accounts.
+ *
+ * dnd-kit also swallows the click that follows a drag, so a row that was moved
+ * is not also selected on release.
+ */
+function SortableAccountRow({
+  id,
+  disabled,
+  children,
+}: {
+  id: string;
+  disabled: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, listeners, transform, transition, isDragging } = useSortable({ id, disabled });
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.6 : 1,
+        // Only the row's own padding shows this; the select button keeps its
+        // pointer cursor, so a press still reads as "open this mailbox".
+        cursor: "grab",
+        position: "relative",
+        zIndex: isDragging ? 1 : undefined,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 function initialOf(text: string): string {
   const trimmed = text.trim();
@@ -136,6 +204,10 @@ export default function SidebarAccountList({
   onSelect,
 }: Props) {
   const { t } = useTranslation();
+  const { reorder, isReordering } = useReorderAccounts();
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
+  );
 
   // The sentinel is what the old `<select>` posted for the combined mailbox;
   // the store normally holds `null` for it, so accept both.
@@ -186,6 +258,15 @@ export default function SidebarAccountList({
 
   function handleSelect(accountId: string | null) {
     onSelect(accountId);
+  }
+
+  /** Hand the new order to the same command the Settings arrows use. */
+  function handleDragEnd({ active, over }: DragEndEvent) {
+    if (!over || active.id === over.id) return;
+    const from = accounts.findIndex((account) => account.id === active.id);
+    const to = accounts.findIndex((account) => account.id === over.id);
+    if (from === -1 || to === -1) return;
+    void reorder(arrayMove(accounts, from, to));
   }
 
   const allUnreadText = showUnread && totalUnread > 0
@@ -248,88 +329,108 @@ export default function SidebarAccountList({
         </div>
       )}
 
-      {accounts.map((account) => {
-        const isActive = !allSelected && account.id === activeAccountId;
-        const unread = unreadCountForAccount(unreadCounts, account.id);
-        const label = accountLabel(account);
-        // Only repeat the address on a second line when it differs from the label.
-        const secondary = account.account_label?.trim() ? account.email : null;
-        const full = accountOptionLabel(account);
-        const unreadText = showUnread && unread > 0
-          ? t("sidebar.unreadCount", "{{count}} unread", { count: unread })
-          : null;
+      {/* The combined row above stays put: it is a view, not a mailbox, so it
+          takes no part in the order. */}
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <SortableContext
+          items={accounts.map((account) => account.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {accounts.map((account) => {
+            const isActive = !allSelected && account.id === activeAccountId;
+            const unread = unreadCountForAccount(unreadCounts, account.id);
+            const label = accountLabel(account);
+            // Only repeat the address on a second line when it differs from the label.
+            const secondary = account.account_label?.trim() ? account.email : null;
+            const full = accountOptionLabel(account);
+            const unreadText = showUnread && unread > 0
+              ? t("sidebar.unreadCount", "{{count}} unread", { count: unread })
+              : null;
 
-        return (
-          <div
-            key={account.id}
-            data-testid={`account-row-${account.id}`}
-            style={rowStyle(isActive)}
-            onMouseEnter={(e) => {
-              if (!isActive) e.currentTarget.style.backgroundColor = "var(--color-sidebar-hover)";
-            }}
-            onMouseLeave={(e) => {
-              if (!isActive) e.currentTarget.style.backgroundColor = "transparent";
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => handleSelect(account.id)}
-              aria-current={isActive ? "true" : undefined}
-              aria-label={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
-              title={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
-              style={selectButtonStyle(isActive)}
-            >
-              <span style={avatarStackStyle()}>
-                <span style={avatarStyle(isActive, collapsed)} aria-hidden="true">
-                  {initialOf(label)}
-                </span>
-                {unreadText && (
-                  <UnreadBadge
-                    count={unread}
-                    testId={`account-unread-${account.id}`}
-                    title={unreadText}
-                  />
-                )}
-              </span>
-              {!collapsed && (
-                <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "1px" }}>
-                  <span
-                    title={full}
-                    style={{
-                      fontSize: "12.5px",
-                      fontWeight: isActive ? 600 : 500,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
+            return (
+              <SortableAccountRow
+                key={account.id}
+                id={account.id}
+                disabled={isReordering}
+              >
+                <div
+                  data-testid={`account-row-${account.id}`}
+                  style={rowStyle(isActive)}
+                  onMouseEnter={(e) => {
+                    if (!isActive) e.currentTarget.style.backgroundColor = "var(--color-sidebar-hover)";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) e.currentTarget.style.backgroundColor = "transparent";
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleSelect(account.id)}
+                    aria-current={isActive ? "true" : undefined}
+                    aria-label={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
+                    title={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
+                    style={selectButtonStyle(isActive)}
                   >
-                    {label}
-                  </span>
-                  {secondary && (
+                    <span style={avatarStackStyle()}>
+                      <span style={avatarStyle(isActive, collapsed)} aria-hidden="true">
+                        {initialOf(label)}
+                      </span>
+                      {unreadText && (
+                        <UnreadBadge
+                          count={unread}
+                          testId={`account-unread-${account.id}`}
+                          title={unreadText}
+                        />
+                      )}
+                    </span>
+                    {!collapsed && (
+                      <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "1px" }}>
+                        <span
+                          title={full}
+                          style={{
+                            fontSize: "12.5px",
+                            fontWeight: isActive ? 600 : 500,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {label}
+                        </span>
+                        {secondary && (
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              color: "var(--color-text-secondary)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {secondary}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </button>
+                  {/* Rendered even at zero unread so the action stays discoverable; the
+                      button disables itself. It is absent for the combined mailbox,
+                      where "mark all read" has no single target. */}
+                  {!collapsed && isActive && (
+                    // A press on the action must not be read as picking up the row.
                     <span
-                      style={{
-                        fontSize: "11px",
-                        color: "var(--color-text-secondary)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      style={{ display: "flex" }}
                     >
-                      {secondary}
+                      <MarkAllReadButton accountId={account.id} accountLabel={full} unread={unread} />
                     </span>
                   )}
-                </span>
-              )}
-            </button>
-            {/* Rendered even at zero unread so the action stays discoverable; the
-                button disables itself. It is absent for the combined mailbox,
-                where "mark all read" has no single target. */}
-            {!collapsed && isActive && (
-              <MarkAllReadButton accountId={account.id} accountLabel={full} unread={unread} />
-            )}
-          </div>
-        );
-      })}
+                </div>
+              </SortableAccountRow>
+            );
+          })}
+        </SortableContext>
+      </DndContext>
     </div>
   );
 }

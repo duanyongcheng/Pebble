@@ -2,7 +2,7 @@ import { accountLabel } from "@/lib/accountIdentity";
 import OAuthIdentityPanel from "./OAuthIdentityPanel";
 import XOAuth2Panel from "./XOAuth2Panel";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, Mail, Pencil, Plug, RefreshCw } from "lucide-react";
+import { Plus, Trash2, Mail, Pencil, Plug, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -24,6 +24,7 @@ import type {
   ImapSyncFolderSettings,
 } from "@/lib/api";
 import { useAccountsQuery, accountsQueryKey, unreadCountForAccount, useAccountUnreadCounts } from "@/hooks/queries";
+import { useReorderAccounts } from "@/hooks/mutations";
 import MarkAllReadButton from "@/components/MarkAllReadButton";
 import { useMailStore } from "@/stores/mail.store";
 import { useUIStore, type RealtimeStatus } from "@/stores/ui.store";
@@ -33,6 +34,62 @@ import { extractErrorMessage } from "@/lib/extractErrorMessage";
 import { getSignature, setSignature } from "@/lib/signatures";
 import { ACCOUNT_COLOR_PRESETS, assignAccountColors, getAccountColor } from "@/lib/accountColors";
 import { inputStyle, labelStyle } from "../../styles/form";
+
+/**
+ * One of the two arrows that move an account up or down the list.
+ *
+ * The icon buttons beside it still carry their hover handling inline; this
+ * keeps the two new ones from adding another copy of it. They can migrate to
+ * this component later.
+ */
+function MoveAccountButton({
+  direction,
+  disabled,
+  title,
+  label,
+  onClick,
+}: {
+  direction: "up" | "down";
+  disabled: boolean;
+  /** Tooltip. The row already says which account this is. */
+  title: string;
+  /** Accessible name, which has to name the account on its own. */
+  label: string;
+  onClick: () => void;
+}) {
+  const Icon = direction === "up" ? ChevronUp : ChevronDown;
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={label}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        padding: "6px",
+        borderRadius: "6px",
+        border: "none",
+        backgroundColor: "transparent",
+        color: "var(--color-text-secondary)",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.35 : 1,
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) {
+          e.currentTarget.style.color = "var(--color-accent)";
+          e.currentTarget.style.backgroundColor = "var(--color-bg-hover)";
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = "var(--color-text-secondary)";
+        e.currentTarget.style.backgroundColor = "transparent";
+      }}
+    >
+      <Icon size={15} />
+    </button>
+  );
+}
 
 export default function AccountsTab() {
   const { t } = useTranslation();
@@ -46,6 +103,8 @@ export default function AccountsTab() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; email: string } | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ id: string; ok: boolean; message: string } | null>(null);
+  // The arrows lock while an order change is being written.
+  const { reorder, isReordering } = useReorderAccounts();
 
   async function doTestConnection(accountId: string) {
     setTestingId(accountId);
@@ -59,6 +118,29 @@ export default function AccountsTab() {
     } finally {
       setTestingId(null);
     }
+  }
+
+  /**
+   * Move one account a single step and save the whole order.
+   *
+   * The list is read from the cache rather than from the rendered prop so a
+   * click that arrives while an earlier order is still in flight works from the
+   * order the user can see.
+   */
+  async function doMove(accountId: string, direction: -1 | 1) {
+    if (isReordering) return;
+    const current = queryClient.getQueryData<Account[]>(accountsQueryKey);
+    if (!current) return;
+
+    const from = current.findIndex((account) => account.id === accountId);
+    const to = from + direction;
+    if (from === -1 || to < 0 || to >= current.length) return;
+
+    const next = [...current];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+
+    await reorder(next);
   }
 
   async function doDelete(accountId: string) {
@@ -122,6 +204,21 @@ export default function AccountsTab() {
           {t("settings.addAccount")}
         </button>
       </div>
+
+      {/* The arrows are the only place this rule is visible, so it is stated
+          rather than left to be discovered when a message goes out from an
+          address the sender did not expect. */}
+      {accounts.length > 1 && (
+        <p
+          style={{
+            margin: "-8px 0 16px",
+            fontSize: "12px",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {t("settings.accountOrderHint", "The first account is the sender new messages default to.")}
+        </p>
+      )}
 
       {/* Empty state */}
       {accounts.length === 0 ? (
@@ -251,6 +348,22 @@ export default function AccountsTab() {
                     flexShrink: 0,
                   }}
                 >
+                  {/* Order is a preference, not just a display detail: the first
+                      account is the sender new mail defaults to. */}
+                  <MoveAccountButton
+                    direction="up"
+                    disabled={index === 0 || isReordering}
+                    title={t("settings.moveAccountUp", "Move up")}
+                    label={t("settings.moveAccountUpFor", "Move {{account}} up", { account: accountLabel(account) })}
+                    onClick={() => doMove(account.id, -1)}
+                  />
+                  <MoveAccountButton
+                    direction="down"
+                    disabled={index === accounts.length - 1 || isReordering}
+                    title={t("settings.moveAccountDown", "Move down")}
+                    label={t("settings.moveAccountDownFor", "Move {{account}} down", { account: accountLabel(account) })}
+                    onClick={() => doMove(account.id, 1)}
+                  />
                   <MarkAllReadButton
                     accountId={account.id}
                     accountLabel={accountLabel(account)}

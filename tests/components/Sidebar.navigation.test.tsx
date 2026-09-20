@@ -1,10 +1,24 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "../../src/components/Sidebar";
 import { useComposeStore } from "../../src/stores/compose.store";
 import { useConfirmStore } from "../../src/stores/confirm.store";
 import { useMailStore } from "../../src/stores/mail.store";
 import { useUIStore } from "../../src/stores/ui.store";
+
+/**
+ * Dragging an account row saves through react-query, so the sidebar needs a
+ * client even in a test that stubs the queries themselves.
+ */
+function renderSidebar() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return render(<Sidebar />, { wrapper });
+}
 
 vi.mock("react-i18next", () => ({
   initReactI18next: {
@@ -119,7 +133,7 @@ describe("Sidebar navigation", () => {
     useUIStore.setState({ activeView: "inbox" });
     useComposeStore.setState({ composeDirty: false, composeMode: null });
 
-    render(<Sidebar />);
+    renderSidebar();
 
     fireEvent.click(screen.getByRole("button", { name: label }));
 
@@ -129,7 +143,7 @@ describe("Sidebar navigation", () => {
   });
 
   it("keeps the sidebar from shrinking under wide message content", () => {
-    render(<Sidebar />);
+    renderSidebar();
 
     const sidebar = screen.getByLabelText("Sidebar");
 
@@ -137,7 +151,7 @@ describe("Sidebar navigation", () => {
   });
 
   it("uses non-submit buttons for bottom navigation actions", () => {
-    render(<Sidebar />);
+    renderSidebar();
 
     expect(screen.getByRole("button", { name: "Snoozed" }).getAttribute("type")).toBe("button");
     expect(screen.getByRole("button", { name: "Contacts" }).getAttribute("type")).toBe("button");
@@ -146,7 +160,7 @@ describe("Sidebar navigation", () => {
   });
 
   it("leaves a dirty compose draft after confirming sidebar navigation", async () => {
-    render(<Sidebar />);
+    renderSidebar();
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
