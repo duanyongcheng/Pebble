@@ -42,6 +42,7 @@ const REALTIME_PREFERENCE_KEY = "pebble-realtime-mode";
 const REALTIME_PREFERENCES = new Set<RealtimePreference>(["realtime", "balanced", "battery", "manual"]);
 const NOTIFICATIONS_KEY = "pebble-notifications-enabled";
 const KEEP_RUNNING_BACKGROUND_KEY = "pebble-keep-running-background";
+const UNREAD_COUNT_KEY = "pebble-show-unread-count";
 export const BACKGROUND_IMAGE_STORAGE_KEY = "pebble-background-image-settings";
 const BACKGROUND_IMAGE_FITS = new Set<BackgroundImageFit>(["cover", "contain", "repeat"]);
 const DEFAULT_BACKGROUND_IMAGE_FIT: BackgroundImageFit = "cover";
@@ -102,6 +103,19 @@ export function readKeepRunningInBackgroundPreference(): boolean {
   return stored === null ? true : stored === "true";
 }
 
+/**
+ * Whether the sidebar shows unread counts.
+ *
+ * On unless the user turned it off. The counts are how a mailbox says that mail
+ * is waiting, so a preference that starts off leaves the sidebar looking as
+ * though nothing has arrived — which is exactly how it reads to someone who has
+ * never opened Settings. Only a stored `"false"` turns them off, so an existing
+ * opt-out is honoured and a fresh install starts with the counts visible.
+ */
+export function readShowUnreadCountPreference(): boolean {
+  return profileLocalStorage.getItem(UNREAD_COUNT_KEY) !== "false";
+}
+
 export function realtimePreferenceToPollInterval(mode: RealtimePreference): number {
   switch (mode) {
     case "realtime":
@@ -118,6 +132,7 @@ export function realtimePreferenceToPollInterval(mode: RealtimePreference): numb
 const initialRealtimeMode = readRealtimePreference();
 const initialNotificationsEnabled = readNotificationsEnabledPreference();
 const initialKeepRunningInBackground = readKeepRunningInBackgroundPreference();
+const initialShowUnreadCount = readShowUnreadCountPreference();
 const initialStartHiddenToTray = readStartHiddenToTrayPreference();
 const initialLanguage = getInitialLanguage();
 const initialBackgroundImage = readBackgroundImageSettings();
@@ -343,9 +358,9 @@ export const useUIStore = create<UIState>((set) => ({
   },
   pendingRuleDraftText: null,
   setPendingRuleDraftText: (text) => set({ pendingRuleDraftText: text }),
-  showFolderUnreadCount: profileLocalStorage.getItem("pebble-show-unread-count") === "true",
+  showFolderUnreadCount: initialShowUnreadCount,
   setShowFolderUnreadCount: (show) => {
-    profileLocalStorage.setItem("pebble-show-unread-count", String(show));
+    profileLocalStorage.setItem(UNREAD_COUNT_KEY, String(show));
     set({ showFolderUnreadCount: show });
   },
 }));

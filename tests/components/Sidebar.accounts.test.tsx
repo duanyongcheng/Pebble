@@ -73,7 +73,7 @@ import Sidebar from "../../src/components/Sidebar";
 import { useComposeStore } from "../../src/stores/compose.store";
 import { useConfirmStore } from "../../src/stores/confirm.store";
 import { useMailStore } from "../../src/stores/mail.store";
-import { useUIStore } from "../../src/stores/ui.store";
+import { useUIStore, readShowUnreadCountPreference } from "../../src/stores/ui.store";
 
 const WORK = {
   id: "account-work",
@@ -204,6 +204,19 @@ describe("Sidebar account list", () => {
 
     expect(screen.getByTestId("account-unread-account-work").textContent).toBe("3");
     expect(screen.getByTestId("account-unread-account-personal").textContent).toBe("7");
+  });
+
+  it("shows the counts when the stored preference says nothing", () => {
+    mocks.counts = { "account-work": 3 };
+    // The `beforeEach` above forces the flag off to keep the other cases
+    // readable; this one asks what a fresh install gets, which is the reader's
+    // answer for a key that was never written.
+    localStorage.removeItem("pebble-show-unread-count");
+    useUIStore.setState({ showFolderUnreadCount: readShowUnreadCountPreference() });
+
+    renderSidebar();
+
+    expect(screen.getByTestId("account-unread-account-work").textContent).toBe("3");
   });
 
   it("totals the unread count on the combined row", () => {

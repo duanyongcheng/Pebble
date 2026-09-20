@@ -4,6 +4,7 @@ import { useMailStore } from "../../src/stores/mail.store";
 import {
   readKeepRunningInBackgroundPreference,
   readNotificationsEnabledPreference,
+  readShowUnreadCountPreference,
   realtimePreferenceToPollInterval,
   useUIStore,
 } from "../../src/stores/ui.store";
@@ -256,6 +257,20 @@ describe("UIStore", () => {
     localStorage.setItem("pebble-keep-running-background", "false");
 
     expect(readKeepRunningInBackgroundPreference()).toBe(false);
+  });
+
+  it("defaults the sidebar unread counts to visible when nothing is stored", () => {
+    localStorage.removeItem("pebble-show-unread-count");
+
+    // The counts are how the sidebar says mail is waiting, so a fresh install
+    // must not look as though nothing has arrived.
+    expect(readShowUnreadCountPreference()).toBe(true);
+  });
+
+  it("honors an explicit opt-out of the sidebar unread counts", () => {
+    localStorage.setItem("pebble-show-unread-count", "false");
+
+    expect(readShowUnreadCountPreference()).toBe(false);
   });
 
   it("persists start-hidden-to-tray preference through the UI store", () => {
