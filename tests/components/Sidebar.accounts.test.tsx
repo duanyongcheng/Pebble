@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   counts: {} as Record<string, number>,
   /** An account whose first sync has not finished has no folders at all. */
   withFolders: true,
+  /** Folders a test needs beyond the one inbox per account built below. */
+  extraFolders: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("react-i18next", () => ({
@@ -32,18 +34,21 @@ vi.mock("../../src/hooks/queries", () => ({
   // account that is selected.
   useFoldersForAccountsQuery: (accountIds: string[]) => ({
     data: mocks.withFolders
-      ? (accountIds ?? []).map((accountId) => ({
-          id: `folder-inbox-${accountId}`,
-          account_id: accountId,
-          remote_id: "INBOX",
-          name: "Inbox",
-          folder_type: "folder",
-          role: "inbox",
-          parent_id: null,
-          color: null,
-          is_system: true,
-          sort_order: 0,
-        }))
+      ? [
+          ...(accountIds ?? []).map((accountId) => ({
+            id: `folder-inbox-${accountId}`,
+            account_id: accountId,
+            remote_id: "INBOX",
+            name: "Inbox",
+            folder_type: "folder",
+            role: "inbox",
+            parent_id: null,
+            color: null,
+            is_system: true,
+            sort_order: 0,
+          })),
+          ...mocks.extraFolders,
+        ]
       : [],
     isFetched: true,
   }),
@@ -102,12 +107,17 @@ function renderSidebar() {
   return render(<Sidebar />, { wrapper });
 }
 
+/**
+ * The button that opens a mailbox. The row also carries a disclosure triangle
+ * for folding its folders, so the two are told apart by test id rather than by
+ * their position among the row's buttons.
+ */
 function accountButton(accountId: string): HTMLElement {
-  return within(screen.getByTestId(`account-row-${accountId}`)).getAllByRole("button")[0];
+  return screen.getByTestId(`account-select-${accountId}`);
 }
 
 function allAccountsButton(): HTMLElement {
-  return within(screen.getByTestId("account-row-all")).getAllByRole("button")[0];
+  return screen.getByTestId("account-select-all");
 }
 
 describe("Sidebar account list", () => {
@@ -116,11 +126,13 @@ describe("Sidebar account list", () => {
     mocks.accounts = [WORK, PERSONAL];
     mocks.counts = {};
     mocks.withFolders = true;
+    mocks.extraFolders = [];
     useUIStore.setState({
       sidebarCollapsed: false,
       activeView: "inbox",
       previousView: "inbox",
       showFolderUnreadCount: false,
+      collapsedAccountGroups: [],
     });
     useMailStore.setState({
       activeAccountId: "account-work",
@@ -167,6 +179,27 @@ describe("Sidebar account list", () => {
 
     expect(useMailStore.getState().activeAccountId).toBe("account-personal");
     // The previous account's folder must not survive the switch.
+    expect(useMailStore.getState().activeFolderId).toBe("folder-inbox-account-personal");
+  });
+
+  it("nests each mailbox's folders under that mailbox", () => {
+    renderSidebar();
+
+    // Both groups are open at once, so every mailbox shows what it holds
+    // without having to be selected first — which is the point of grouping.
+    const work = screen.getByTestId("account-folders-account-work");
+    const personal = screen.getByTestId("account-folders-account-personal");
+
+    expect(within(work).getByTestId("folder-row-folder-inbox-account-work")).toBeTruthy();
+    expect(within(personal).getByTestId("folder-row-folder-inbox-account-personal")).toBeTruthy();
+    // A folder belongs to exactly one group.
+    expect(within(work).queryByTestId("folder-row-folder-inbox-account-personal")).toBeNull();
+
+    // Each folder row opens its own account's folder, so the two same-named
+    // rows are told apart by the group they live in rather than by their label.
+    fireEvent.click(within(personal).getByTestId("folder-row-folder-inbox-account-personal"));
+
+    expect(useMailStore.getState().activeAccountId).toBe("account-personal");
     expect(useMailStore.getState().activeFolderId).toBe("folder-inbox-account-personal");
   });
 
@@ -333,5 +366,150 @@ describe("Sidebar account list", () => {
     expect(screen.getByTestId("account-unread-account-work").textContent).toBe("99+");
     // The combined row is capped the same way, even though its total is 132.
     expect(screen.getByTestId("account-unread-all").textContent).toBe("99+");
+  });
+
+  it("folds a mailbox's folders away from its own disclosure control", () => {
+    renderSidebar();
+
+    const toggle = screen.getByTestId("account-toggle-account-work");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("account-folders-account-work")).toBeTruthy();
+
+    fireEvent.click(toggle);
+
+    expect(screen.queryByTestId("account-folders-account-work")).toBeNull();
+    expect(screen.getByTestId("account-toggle-account-work").getAttribute("aria-expanded")).toBe("false");
+    // Folding one mailbox leaves the other one open.
+    expect(screen.getByTestId("account-folders-account-personal")).toBeTruthy();
+    // The mailbox is still selectable while its folders are hidden.
+    expect(screen.getByTestId("account-select-account-work")).toBeTruthy();
+  });
+
+  it("remembers which mailboxes were folded shut", () => {
+    renderSidebar();
+
+    fireEvent.click(screen.getByTestId("account-toggle-account-work"));
+
+    expect(useUIStore.getState().collapsedAccountGroups).toEqual(["account-work"]);
+    expect(localStorage.getItem("pebble-collapsed-account-groups")).toBe('["account-work"]');
+  });
+
+  it("opens a mailbox that has no folders to fold", () => {
+    // An account whose first sync has not finished has nothing to nest, so it
+    // offers no triangle rather than one that would do nothing.
+    mocks.withFolders = false;
+    renderSidebar();
+
+    expect(screen.queryByTestId("account-toggle-account-work")).toBeNull();
+    expect(screen.getByTestId("account-select-account-work")).toBeTruthy();
+  });
+
+  it("keeps every mailbox's folders visible while the rail is folded away", () => {
+    // The rail has no room for children at all, so no group may claim to be
+    // open or closed — the triangles are gone with the labels.
+    useUIStore.setState({ sidebarCollapsed: true });
+    renderSidebar();
+
+    expect(screen.queryByTestId("account-toggle-account-work")).toBeNull();
+    expect(screen.queryByTestId("account-folders-account-work")).toBeNull();
+  });
+
+  it("keeps the cross-mailbox views reachable while the rail is folded away", () => {
+    // Starred and Snoozed belong to no mailbox, so folding the rail must not
+    // take them with it: their icons are the only way to reach them from here.
+    useUIStore.setState({ sidebarCollapsed: true });
+    renderSidebar();
+
+    expect(screen.getByRole("button", { name: "Starred" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Snoozed" })).toBeTruthy();
+  });
+
+  it("shows the combined mailbox as a group with the roles every account shares", () => {
+    useMailStore.setState({ activeAccountId: null });
+    renderSidebar();
+
+    // The combined view is a group like any other, so it says what it holds
+    // rather than only naming itself.
+    const combined = screen.getByTestId("account-folders-all");
+    expect(within(combined).getByTestId("folder-row-all:inbox")).toBeTruthy();
+
+    // One Inbox for the whole column, not one per account.
+    expect(screen.getAllByTestId(/^folder-row-all:inbox$/)).toHaveLength(1);
+    // And the mailboxes keep their own separate rows.
+    expect(screen.getByTestId("folder-row-folder-inbox-account-work")).toBeTruthy();
+    expect(screen.getByTestId("folder-row-folder-inbox-account-personal")).toBeTruthy();
+  });
+
+  it("opens the combined mailbox from a row under the combined group", () => {
+    useMailStore.setState({ activeAccountId: "account-work" });
+    renderSidebar();
+
+    fireEvent.click(screen.getByTestId("folder-row-all:inbox"));
+
+    // A shared role belongs to no single account, so the scope widens to all of
+    // them rather than staying on whichever mailbox happened to be selected.
+    expect(useMailStore.getState().activeAccountId).toBeNull();
+    expect(useMailStore.getState().activeFolderId).toBe("all:inbox");
+  });
+
+  it("does not repeat a custom folder under the combined group", () => {
+    // A custom folder belongs to exactly one mailbox and is already listed under
+    // it, so the combined group shows only the roles every account shares.
+    mocks.accounts = [WORK, PERSONAL];
+    renderSidebar();
+
+    const combined = screen.getByTestId("account-folders-all");
+    const combinedRows = within(combined).getAllByRole("button");
+
+    // Two accounts with one inbox each still contribute a single combined Inbox.
+    expect(combinedRows).toHaveLength(1);
+    expect(combinedRows[0].getAttribute("data-testid")).toBe("folder-row-all:inbox");
+  });
+
+  it("names a nested folder by its last segment, not by its path", () => {
+    // IMAP hands a nested folder over as one path joined by the server's own
+    // delimiter, and a Gmail label keeps whatever slashes its owner typed. The
+    // row is one line and answers "which folder is this" — the level above it is
+    // the mailbox already named on the group.
+    mocks.extraFolders = [
+      {
+        id: "folder-nested",
+        account_id: "account-work",
+        remote_id: "Work/Reports",
+        name: "Work/Reports",
+        folder_type: "folder",
+        role: null,
+        parent_id: null,
+        color: null,
+        is_system: true,
+        sort_order: 1,
+      },
+      {
+        id: "folder-gmail",
+        account_id: "account-work",
+        remote_id: "[Gmail]/All Mail",
+        name: "[Gmail]/All Mail",
+        folder_type: "folder",
+        role: null,
+        parent_id: null,
+        color: null,
+        is_system: true,
+        sort_order: 2,
+      },
+    ];
+    renderSidebar();
+
+    const nested = screen.getByTestId("folder-row-folder-nested");
+    expect(within(nested).getByText("Reports")).toBeTruthy();
+    expect(nested.textContent).not.toContain("Work/Reports");
+
+    expect(within(screen.getByTestId("folder-row-folder-gmail")).getByText("All Mail")).toBeTruthy();
+
+    // The path is not thrown away: it is what the row explains itself with.
+    expect(nested.getAttribute("title")).toBe("Work/Reports");
+    // A folder whose name was never a path has nothing extra to say.
+    expect(
+      screen.getByTestId("folder-row-folder-inbox-account-work").getAttribute("title"),
+    ).toBeNull();
   });
 });

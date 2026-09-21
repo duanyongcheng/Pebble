@@ -54,6 +54,7 @@
     "navigation": "侧边栏",
     "search": "搜索",
     "mailFolders": "邮件文件夹",
+    "toggleMailbox": "{{name}} 的文件夹",
     "tools": "工具",
     "allAccounts": "全部邮箱",
     "unreadCount": "{{count}} 封未读",
@@ -486,6 +487,21 @@
     "markAllReadInProgress": "正在标为已读...",
     "markAllReadSuccess": "已将 {{account}} 中的 {{count}} 封邮件标为已读",
     "markAllReadFailed": "标为已读失败"
+  },
+  "folderMenu": {
+    "actions": "{{folder}} 操作",
+    "markAllRead": "全部标为已读",
+    "markAllReadSuccess": "已将 {{folder}} 中的 {{count}} 封邮件标为已读",
+    "markAllReadFailed": "标为已读失败：{{error}}",
+    "syncFolder": "同步此文件夹",
+    "syncStarted": "正在同步 {{folder}}...",
+    "syncFailed": "同步失败：{{error}}",
+    "emptyTrash": "清空废纸篓",
+    "emptyTrashConfirm": "确定永久删除废纸篓中的所有邮件？",
+    "emptySpam": "清空垃圾邮件",
+    "emptySpamConfirm": "确定永久删除垃圾邮件中的所有邮件？",
+    "emptySuccess": "已删除 {{count}} 封邮件",
+    "emptyFailed": "清空文件夹失败：{{error}}"
   },
   "snooze": {
     "failed": "稍后提醒失败",

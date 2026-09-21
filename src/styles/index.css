@@ -200,6 +200,112 @@ option {
   padding: 7px;
 }
 
+/* A folder nested under its mailbox. The indent is what says the row belongs to
+   the group above it, so it is spent on the leading edge alone: the label keeps
+   the same trailing column as every other row, which is what holds the unread
+   counts in one line down the sidebar. */
+.sidebar-row--nested {
+  padding-left: 30px;
+}
+
+.sidebar-row--nested .sidebar-row-icon {
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+}
+
+/* The mailbox column. Its groups are the only thing that scrolls, so the search
+   field and the tools stay put while a long folder list moves under them. */
+.sidebar-mail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding-top: 6px;
+}
+
+.sidebar-mailboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+}
+
+/* Folded away, the rail is a column of icons and nothing else, so every
+   horizontal inset that exists to line labels up has to go: the 8px gutter, the
+   reserved triangle column and the stable scrollbar gutter all push a 60px rail
+   off its own centre. The scrollbar is left to overlay instead, which is what
+   macOS does anyway. */
+.sidebar--collapsed .sidebar-mailboxes {
+  padding: 0;
+}
+
+.sidebar--collapsed .sidebar-account-row {
+  padding: 0;
+}
+
+.sidebar--collapsed .sidebar-mail-scroll {
+  scrollbar-gutter: auto;
+}
+
+/* A mailbox's folders, indented under its row. The hairline is drawn in the
+   gutter the indent opens up, so the nesting reads as one group rather than as
+   rows that merely start further right. */
+.sidebar-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 1px 0 4px;
+  position: relative;
+}
+
+.sidebar-group-children::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 17px;
+  width: 1px;
+  background-color: color-mix(in srgb, var(--color-border) 80%, transparent);
+}
+
+/* The disclosure triangle. It owns the press that folds a group, so the account
+   row beside it can keep the press that opens the mailbox. */
+.sidebar-group-toggle,
+.sidebar-group-toggle-spacer {
+  flex-shrink: 0;
+  width: 18px;
+  height: 22px;
+}
+
+.sidebar-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background-color: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.sidebar-group-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.sidebar-group-toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.sidebar-group-chevron {
+  transition: transform 150ms ease;
+}
+
+.sidebar-group-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
 .sidebar-row-icon {
   position: relative;
   display: inline-flex;
@@ -322,23 +428,21 @@ option {
   padding-bottom: 8px;
 }
 
-/* The folder list is the only part that scrolls, so it owns the leftover
-   height. With the labels gone it starts a little lower, which is what keeps
-   the account avatars from crowding the search field. */
-.sidebar-folders {
-  padding: 0 8px;
-}
-
-.sidebar--collapsed .sidebar-folders {
-  padding-top: 4px;
-}
+/* The mailbox column is the only part that scrolls, so it owns the leftover
+   height; see `.sidebar-mail-scroll`. */
 
 /* Mailbox rows. The whole row is the hit target; the label block beside the
-   avatar keeps its own button so the row can also carry an action. */
+   avatar keeps its own button so the row can also carry an action. The leading
+   column belongs to the disclosure triangle and is reserved whether or not this
+   mailbox has folders to fold, so every avatar sits on one left edge. */
 .sidebar-account-row {
   display: flex;
   align-items: center;
   gap: 2px;
+  /* The trailing inset is what puts an account's count in the same column as a
+     folder's: a folder row is its own button and spends 8px of its own padding
+     on that edge, so the account row has to spend the same 8px to match. */
+  padding: 0 8px 0 2px;
   border-radius: 8px;
   background-color: transparent;
   transition: background-color 120ms ease;
@@ -358,9 +462,10 @@ option {
   display: flex;
   align-items: center;
   /* The inset and the gap are what put a 26px avatar's centre on the same
-     column as a folder's 16px icon, and the address on the same column as a
-     folder's label. The row carries the surface, so the asymmetric inset is
-     invisible until the row takes keyboard focus. */
+     column as a folder's 16px icon, and the mailbox name on the same column as
+     a folder's label: the avatar ends at 59 and the icon at 54, so the gap is
+     the 5px that lands both labels on 64. The row carries the surface, so the
+     asymmetric inset is invisible until the row takes keyboard focus. */
   gap: 5px;
   padding: 5px 6px 5px 3px;
   border: 0;
@@ -370,6 +475,36 @@ option {
   font-family: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+/* The mailbox name and, when it has its own label, the address under it. */
+.sidebar-account-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-account-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The selected mailbox carries its weight, the way the selected folder does. */
+.sidebar-account-row[data-selected="true"] .sidebar-account-title {
+  font-weight: 600;
+}
+
+.sidebar-account-address {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-account-button:focus-visible {

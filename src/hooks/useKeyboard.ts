@@ -203,7 +203,10 @@ export function useKeyboard() {
                 if (result === "skipped") return;
                 queryClient.invalidateQueries({ queryKey: ["messages"] });
                 queryClient.invalidateQueries({ queryKey: ["threads"] });
+                // Archiving unread mail changes both the folder row and the
+                // mailbox badge, which are separate queries.
                 queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });
+                queryClient.invalidateQueries({ queryKey: ["account-unread-counts"] });
                 const msg = result === "unarchived" ? i18n.t("messageActions.unarchiveSuccess", "Message moved to inbox") : i18n.t("messageActions.archiveSuccess", "Message archived");
                 useToastStore.getState().addToast({ message: msg, type: "success" });
               })

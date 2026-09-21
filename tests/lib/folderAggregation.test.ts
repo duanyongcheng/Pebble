@@ -4,6 +4,7 @@ import {
   allAccountsFolderId,
   buildAllAccountsFolders,
   folderIdsForSelection,
+  folderLeafName,
   roleFromAllAccountsFolderId,
   sortFoldersForSidebar,
   unreadCountForFolder,
@@ -117,5 +118,30 @@ describe("folder aggregation", () => {
       "spam",
       "project",
     ]);
+  });
+});
+
+describe("folderLeafName", () => {
+  it("keeps the last segment of a nested folder's path", () => {
+    expect(folderLeafName("Work/Reports")).toBe("Reports");
+    expect(folderLeafName("[Gmail]/All Mail")).toBe("All Mail");
+    expect(folderLeafName("2026/Q1/Clients")).toBe("Clients");
+  });
+
+  it("accepts the backslash a server may have used as its delimiter", () => {
+    expect(folderLeafName("Work\\Reports")).toBe("Reports");
+  });
+
+  it("leaves a name with no path in it alone", () => {
+    expect(folderLeafName("Projects")).toBe("Projects");
+    // A slash inside a word is a name, not a level: only a separator that has
+    // something before and after it splits anything.
+    expect(folderLeafName("and/or")).toBe("or");
+    expect(folderLeafName("Projects ")).toBe("Projects");
+  });
+
+  it("falls back to the name it was given rather than to an empty row", () => {
+    expect(folderLeafName("//")).toBe("//");
+    expect(folderLeafName("")).toBe("");
   });
 });

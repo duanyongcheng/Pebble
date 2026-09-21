@@ -143,6 +143,20 @@ impl Store {
         Ok(folders.into_iter().find(|f| f.name.to_lowercase() == lower))
     }
 
+    /// Delete one stored folder by its provider id.
+    ///
+    /// The junction rows go with it through `ON DELETE CASCADE`, which can leave
+    /// a message with no folder at all — invisible in every folder list while
+    /// still carrying its `is_read` flag. `UNREAD_MAIL_PREDICATE` in
+    /// `messages.rs` deliberately does not count folder-less mail as a mailbox's
+    /// unread mail for exactly that reason: such a row has no folder badge to
+    /// explain it and no folder row to clear it from.
+    ///
+    /// The row is left in place rather than retired here. A Gmail message that
+    /// only ever carried a hidden label (starred and archived, say) is still
+    /// reachable through the flag-based views, and soft-deleting it would drop it
+    /// out of Starred. Views that need folder membership filter it out on their
+    /// own.
     pub fn delete_folder_by_remote_id(&self, account_id: &str, remote_id: &str) -> Result<()> {
         self.with_write(|conn| {
             conn.execute(
@@ -520,5 +534,60 @@ mod tests {
             state.extra.get("custom_setting"),
             Some(&serde_json::Value::String("preserved".to_string()))
         );
+    }
+
+    /// The reported symptom: "the folder has no unread mail left, but the mailbox
+    /// still shows some".
+    ///
+    /// Dropping a folder leaves any message that lived only in it with no folder
+    /// relation at all. It disappears from every folder row — they all join
+    /// `message_folders` — while its `is_read = 0` flag survives, so a mailbox
+    /// count that ignored folder membership would keep showing it forever with
+    /// nothing to open and no row whose "mark all as read" could clear it.
+    #[test]
+    fn deleting_a_folder_does_not_strand_unread_mail_in_the_mailbox_count() {
+        let store = Store::open_in_memory().unwrap();
+        let account = account();
+        store.insert_account(&account).unwrap();
+
+        let inbox = folder(&account.id, "folder-inbox", "INBOX", Some(FolderRole::Inbox));
+        let chat = folder(&account.id, "folder-chat", "CHAT", None);
+        store.insert_folder(&inbox).unwrap();
+        store.insert_folder(&chat).unwrap();
+
+        // One message in the inbox, one that only ever carried the label that is
+        // about to be dropped.
+        let kept = message(&account.id, "message-kept", "100");
+        let stranded = message(&account.id, "message-stranded", "101");
+        store
+            .insert_message(&kept, std::slice::from_ref(&inbox.id))
+            .unwrap();
+        store
+            .insert_message(&stranded, std::slice::from_ref(&chat.id))
+            .unwrap();
+
+        store
+            .delete_folder_by_remote_id(&account.id, "CHAT")
+            .unwrap();
+
+        // The row survives — a Gmail message with no visible folder can still be
+        // starred — but it is no longer a mailbox's unread mail.
+        assert!(store.get_message("message-stranded").unwrap().is_some());
+        assert!(store
+            .get_message_folder_ids("message-stranded")
+            .unwrap()
+            .is_empty());
+
+        assert_eq!(
+            store.get_unread_counts_by_account().unwrap(),
+            vec![(account.id.clone(), 1)],
+            "only the inbox message is unread mail the user can reach"
+        );
+
+        // And the folder rows agree: nothing is left for a stale badge to
+        // contradict.
+        let folder_counts = store.get_folder_unread_counts(&account.id).unwrap();
+        assert_eq!(folder_counts.get(&inbox.id), Some(&1));
+        assert_eq!(folder_counts.values().sum::<u32>(), 1);
     }
 }

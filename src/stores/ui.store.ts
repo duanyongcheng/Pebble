@@ -43,6 +43,7 @@ const REALTIME_PREFERENCES = new Set<RealtimePreference>(["realtime", "balanced"
 const NOTIFICATIONS_KEY = "pebble-notifications-enabled";
 const KEEP_RUNNING_BACKGROUND_KEY = "pebble-keep-running-background";
 const UNREAD_COUNT_KEY = "pebble-show-unread-count";
+export const COLLAPSED_ACCOUNT_GROUPS_KEY = "pebble-collapsed-account-groups";
 export const BACKGROUND_IMAGE_STORAGE_KEY = "pebble-background-image-settings";
 const BACKGROUND_IMAGE_FITS = new Set<BackgroundImageFit>(["cover", "contain", "repeat"]);
 const DEFAULT_BACKGROUND_IMAGE_FIT: BackgroundImageFit = "cover";
@@ -116,6 +117,29 @@ export function readShowUnreadCountPreference(): boolean {
   return profileLocalStorage.getItem(UNREAD_COUNT_KEY) !== "false";
 }
 
+/**
+ * Which mailbox groups the reader has folded shut, by account id.
+ *
+ * Empty on a fresh install: a group that starts collapsed hides the folders that
+ * are the reason the group exists, so the sidebar opens showing every mailbox's
+ * contents rather than a column of closed drawers. Only the groups the reader
+ * closed are stored, which is also what keeps a newly added account open.
+ *
+ * A value that cannot be read is treated as "nothing is collapsed" rather than
+ * repaired, so a damaged preference cannot leave a mailbox unreachable.
+ */
+export function readCollapsedAccountGroups(): string[] {
+  const stored = profileLocalStorage.getItem(COLLAPSED_ACCOUNT_GROUPS_KEY);
+  if (!stored) return [];
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id): id is string => typeof id === "string" && id.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 export function realtimePreferenceToPollInterval(mode: RealtimePreference): number {
   switch (mode) {
     case "realtime":
@@ -133,6 +157,7 @@ const initialRealtimeMode = readRealtimePreference();
 const initialNotificationsEnabled = readNotificationsEnabledPreference();
 const initialKeepRunningInBackground = readKeepRunningInBackgroundPreference();
 const initialShowUnreadCount = readShowUnreadCountPreference();
+const initialCollapsedAccountGroups = readCollapsedAccountGroups();
 const initialStartHiddenToTray = readStartHiddenToTrayPreference();
 const initialLanguage = getInitialLanguage();
 const initialBackgroundImage = readBackgroundImageSettings();
@@ -202,6 +227,9 @@ interface UIState {
   setPendingRuleDraftText: (text: string | null) => void;
   showFolderUnreadCount: boolean;
   setShowFolderUnreadCount: (show: boolean) => void;
+  /** Account ids whose folder group is folded shut in the sidebar. */
+  collapsedAccountGroups: string[];
+  toggleAccountGroup: (accountId: string) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -362,5 +390,16 @@ export const useUIStore = create<UIState>((set) => ({
   setShowFolderUnreadCount: (show) => {
     profileLocalStorage.setItem(UNREAD_COUNT_KEY, String(show));
     set({ showFolderUnreadCount: show });
+  },
+  collapsedAccountGroups: initialCollapsedAccountGroups,
+  toggleAccountGroup: (accountId) => {
+    const collapsed = useUIStore.getState().collapsedAccountGroups;
+    const next = collapsed.includes(accountId)
+      ? collapsed.filter((id) => id !== accountId)
+      : [...collapsed, accountId];
+    // Stored as a list rather than a map so the value stays readable in a
+    // settings export and does not grow a key per account ever configured.
+    profileLocalStorage.setItem(COLLAPSED_ACCOUNT_GROUPS_KEY, JSON.stringify(next));
+    set({ collapsedAccountGroups: next });
   },
 }));

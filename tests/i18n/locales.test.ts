@@ -158,5 +158,31 @@ describe("locale files", () => {
     expect(en.shortcuts.summarizeMessage).toBeTruthy();
     expect(zh.shortcuts.summarizeMessage).toBeTruthy();
   });
+
+  it("translates the folder context menu in English and Chinese", () => {
+    const en = readLocale("en");
+    const zh = readLocale("zh");
+
+    expect(en.folderMenu.markAllRead).toBe("Mark all as read");
+    expect(en.folderMenu.syncFolder).toBe("Sync this folder");
+    expect(en.folderMenu.emptyTrash).toBe("Empty Trash");
+    expect(en.folderMenu.emptySpam).toBe("Empty Spam");
+    expect(zh.folderMenu.markAllRead).toBe("全部标为已读");
+    expect(zh.folderMenu.syncFolder).toBe("同步此文件夹");
+    expect(zh.folderMenu.emptyTrash).toBe("清空废纸篓");
+    expect(zh.folderMenu.emptySpam).toBe("清空垃圾邮件");
+  });
+
+  it("keeps the folder menu keys in step across languages", () => {
+    const en = readLocale("en");
+    const zh = readLocale("zh");
+
+    // A key missing on one side silently falls back to the other language's
+    // wording, which is the failure this comparison exists to catch.
+    expect(Object.keys(zh.folderMenu).sort()).toEqual(Object.keys(en.folderMenu).sort());
+    // The destructive actions are the ones that must never render as a bare key.
+    expect(zh.folderMenu.emptyTrashConfirm).toBeTruthy();
+    expect(zh.folderMenu.emptySpamConfirm).toBeTruthy();
+  });
 });
 

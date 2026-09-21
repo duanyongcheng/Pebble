@@ -928,6 +928,21 @@ export async function markAccountAllRead(accountId: string): Promise<number> {
   return invoke<number>("mark_account_all_read", { accountId });
 }
 
+/**
+ * Mark every unread message **in the given folders** as read.
+ *
+ * `folderIds` are local folder ids, so one call can carry a single folder or
+ * the several folders a combined sidebar row stands for. The scope is the
+ * folders' own unread count, and an empty list clears nothing rather than
+ * widening to the whole mailbox.
+ */
+export async function markFolderAllRead(
+  accountId: string,
+  folderIds: string[],
+): Promise<number> {
+  return invoke<number>("mark_folder_all_read", { accountId, folderIds });
+}
+
 // ─── Autostart API ───────────────────────────────────────────────────────────
 
 /** Whether Pebble is registered to launch when the user logs in. */

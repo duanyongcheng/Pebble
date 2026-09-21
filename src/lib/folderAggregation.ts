@@ -99,3 +99,30 @@ export function unreadCountForFolder(
   const matchingFolderIds = folderIdsForSelection(folderId, folders);
   return matchingFolderIds.reduce((sum, id) => sum + (countsByFolderId[id] ?? 0), 0);
 }
+
+/**
+ * The last segment of a folder's path — the part that names the folder itself.
+ *
+ * A nested folder arrives as one string: IMAP joins the levels with the
+ * server's own delimiter (`Work/Reports`, `[Gmail]/All Mail`), and a Gmail
+ * label keeps whatever slashes its owner typed. A sidebar row is one line and
+ * answers "which folder is this", not "where does it hang": the levels above it
+ * are either the mailbox already named on the group above, or a tree the
+ * sidebar does not draw. Shortening here rather than in the backend is
+ * deliberate — the full path stays in `Folder::name`, which is what the
+ * settings list, the sync scope and every lookup still address the folder by.
+ *
+ * A backslash counts as a separator too, because the servers that let an
+ * administrator pick a Windows-style delimiter are the ones whose folders would
+ * otherwise keep a path in the row. Nothing is invented for a name that has no
+ * path in it, and a name that is nothing but separators is returned as it was
+ * rather than as an empty row.
+ */
+export function folderLeafName(name: string): string {
+  const segments = name.split(/[/\\]/);
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index].trim();
+    if (segment) return segment;
+  }
+  return name.trim();
+}

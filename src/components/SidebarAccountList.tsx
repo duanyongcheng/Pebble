@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Layers } from "lucide-react";
+import { ChevronRight, Layers } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -15,24 +15,79 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import MarkAllReadButton from "./MarkAllReadButton";
-import { accountLabel, accountOptionLabel } from "../lib/accountIdentity";
-import { assignAccountColors, getAccountColor } from "../lib/accountColors";
-import { unreadCountForAccount } from "../hooks/queries/useAccountUnreadCounts";
+import { folderIcon, folderLabel } from "./folderIcon";
 import { useReorderAccounts } from "../hooks/mutations";
-import { ALL_ACCOUNTS_SELECT_VALUE } from "../lib/folderAggregation";
-import type { Account } from "../lib/api";
+import { folderLeafName, unreadCountForFolder } from "../lib/folderAggregation";
+import type { Account, Folder as FolderType } from "../lib/api";
+
+/**
+ * One entry in the mailbox column: a mailbox, or the combined view.
+ *
+ * The combined view is modelled as a group too, because it answers the same
+ * question in the same shape — a heading with destinations under it. What
+ * differs is only that it owns no mailbox: its children are the role folders
+ * every account contributes to, and it cannot be reordered or marked read.
+ */
+export interface MailboxGroup {
+  /** An account id, or `ALL_ACCOUNTS_ID` for the combined view. */
+  id: string;
+  /** `null` for the combined view. */
+  account: Account | null;
+  label: string;
+  /** Second line, shown only for an account that carries its own label. */
+  secondary: string | null;
+  /** Full identity, for tooltips and accessible names. */
+  full: string;
+  unread: number;
+  /** The rows nested under this group, already in display order. */
+  folders: FolderType[];
+  /** Avatar tint, or `null` for the combined view's own neutral avatar. */
+  color: string | null;
+  selected: boolean;
+  /** The combined view takes no part in the mailbox order. */
+  sortable: boolean;
+  /** Nor does it have one mailbox for "mark all read" to clear. */
+  canMarkAllRead: boolean;
+  /**
+   * A child row stands for every account's copy of its role, so its count is a
+   * sum across mailboxes rather than the single folder's own number.
+   */
+  childrenAreCombined: boolean;
+}
 
 interface Props {
-  accounts: Account[];
-  /** `null` means the combined "all accounts" mailbox. */
-  activeAccountId: string | null;
-  /** Unread mail per account, keyed by account id. */
-  unreadCounts: Record<string, number>;
+  groups: MailboxGroup[];
   collapsed: boolean;
   /** Mirrors the "show unread count badges in sidebar" setting. */
   showUnread: boolean;
-  /** `null` selects the combined mailbox. */
-  onSelect: (accountId: string | null) => void;
+  /** Unread mail per folder id, used by the groups that own real folders. */
+  folderUnreadCounts: Record<string, number>;
+  /** Every folder listed here, so a combined role can be totalled. */
+  allFolders: FolderType[];
+  /** The folder currently open, so its row can be marked. */
+  activeFolderId: string | null;
+  /** True while the mail view is the one showing the selected folder. */
+  mailViewActive: boolean;
+  onSelectGroup: (groupId: string) => void;
+  onFolderSelect: (folderId: string, groupId: string) => void;
+  /**
+   * A folder row was right-clicked. The group travels with the folder because a
+   * combined row (`all:inbox`) stands for every account's copy of its role, and
+   * only the group says which expansion the menu should act on.
+   */
+  onFolderContextMenu?: (
+    folder: FolderType,
+    group: MailboxGroup,
+    position: { x: number; y: number },
+  ) => void;
+  /** Account ids whose group is folded shut. */
+  collapsedGroupIds: string[];
+  onToggleGroup: (groupId: string) => void;
+  /**
+   * Views that belong to no single mailbox. They sit above the groups, the way
+   * macOS Mail keeps its favorites above the accounts.
+   */
+  pinnedRows?: React.ReactNode;
 }
 
 const AVATAR_SIZE = 26;
@@ -57,24 +112,28 @@ const COMPACT_BADGE_CAP = 9;
 const DRAG_ACTIVATION_DISTANCE = 5;
 
 /**
- * One draggable account row.
+ * One draggable mailbox: the account row plus the folders nested under it.
  *
- * The whole row is the drag surface rather than a handle, because the list is
- * short and the label is the obvious thing to grab. The gesture is pointer-only
- * on purpose: dnd-kit's keyboard sensor needs `role="button"` and a tab stop on
- * this wrapper, which would nest the row's own select button inside a second
- * button, and a keyboard user already has the arrows in Settings › Accounts.
+ * The transform covers the whole group, so a mailbox that is moved carries its
+ * folders with it, while the drag listeners sit on the header alone — a press
+ * that starts on a folder row is a click on that folder, never the beginning of
+ * a mailbox reorder.
  *
- * dnd-kit also swallows the click that follows a drag, so a row that was moved
- * is not also selected on release.
+ * The gesture is pointer-only on purpose: dnd-kit's keyboard sensor needs
+ * `role="button"` and a tab stop on this wrapper, which would nest the row's own
+ * buttons inside a second button, and a keyboard user already has the arrows in
+ * Settings › Accounts. dnd-kit also swallows the click that follows a drag, so a
+ * row that was moved is not also selected on release.
  */
-function SortableAccountRow({
+function SortableAccountGroup({
   id,
   disabled,
+  header,
   children,
 }: {
   id: string;
   disabled: boolean;
+  header: React.ReactNode;
   children: React.ReactNode;
 }) {
   const { setNodeRef, listeners, transform, transition, isDragging } = useSortable({ id, disabled });
@@ -82,18 +141,19 @@ function SortableAccountRow({
   return (
     <div
       ref={setNodeRef}
-      {...listeners}
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.6 : 1,
-        // Only the row's own padding shows this; the select button keeps its
-        // pointer cursor, so a press still reads as "open this mailbox".
-        cursor: "grab",
         position: "relative",
         zIndex: isDragging ? 1 : undefined,
       }}
     >
+      {/* The header is the handle: the list is short and the label is the
+          obvious thing to grab. */}
+      <div {...listeners} style={{ cursor: "grab" }}>
+        {header}
+      </div>
       {children}
     </div>
   );
@@ -200,25 +260,36 @@ function UnreadBadge({
 }
 
 /**
- * The account picker in the sidebar.
+ * The mailbox column.
  *
- * Every configured mailbox is listed at once — with its own unread count — so
- * accounts can be told apart and switched between without opening a dropdown.
- * Rows for accounts that carry a custom label show the label and the address on
- * two lines; unlabelled accounts show the address alone. The selected row also
- * carries the mark-all-read action, because that work belongs to one mailbox and
- * has no meaning for the combined view.
+ * Every configured mailbox is its own group with its folders nested underneath —
+ * the shape macOS Mail uses, and the one that answers the question a mail
+ * sidebar is actually asked: *which mailbox does this folder belong to?* The
+ * previous layout stacked an account picker on top of a single flat folder list,
+ * so the column read as two lists rather than one, and once two accounts shared
+ * a folder name there was no way to tell which mailbox a row belonged to.
  *
- * Counts land in the same trailing column the folder list uses, so the two
- * blocks read as one list and the numbers line up.
+ * A group is folded by pressing its disclosure triangle; the account row itself
+ * still opens the mailbox, because that is the more common gesture. The two
+ * actions get their own targets rather than sharing one press.
+ *
+ * While the rail is folded there is no room for children, so the groups reduce
+ * to avatars and no triangle is drawn.
  */
 export default function SidebarAccountList({
-  accounts,
-  activeAccountId,
-  unreadCounts,
+  groups,
   collapsed,
   showUnread,
-  onSelect,
+  folderUnreadCounts,
+  allFolders,
+  activeFolderId,
+  mailViewActive,
+  onSelectGroup,
+  onFolderSelect,
+  onFolderContextMenu,
+  collapsedGroupIds,
+  onToggleGroup,
+  pinnedRows,
 }: Props) {
   const { t } = useTranslation();
   const { reorder, isReordering } = useReorderAccounts();
@@ -226,28 +297,7 @@ export default function SidebarAccountList({
     useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
   );
 
-  // The sentinel is what the old `<select>` posted for the combined mailbox;
-  // the store normally holds `null` for it, so accept both.
-  const allSelected = !activeAccountId || activeAccountId === ALL_ACCOUNTS_SELECT_VALUE;
-  const showAllRow = accounts.length > 1;
-  const totalUnread = accounts.reduce(
-    (sum, account) => sum + unreadCountForAccount(unreadCounts, account.id),
-    0,
-  );
-
-  /**
-   * Colours are handed out across the whole list, so two mailboxes never end up
-   * with the same one and the avatar matches the badge on the account's mail.
-   */
-  const colorsByAccountId = assignAccountColors(accounts);
-
-  function accountColorOf(account: Account): string {
-    return colorsByAccountId.get(account.id) ?? getAccountColor(account, account.id);
-  }
-
-  function buttonClass(collapsedRow: boolean): string {
-    return collapsedRow ? "sidebar-account-button sidebar-account-button--collapsed" : "sidebar-account-button";
-  }
+  const sortableGroups = groups.filter((group) => group.sortable);
 
   /**
    * Collapsed rows lose their label, so the accessible name is the only place a
@@ -257,192 +307,233 @@ export default function SidebarAccountList({
     return unreadText ? `${label} · ${unreadText}` : label;
   }
 
-  function handleSelect(accountId: string | null) {
-    onSelect(accountId);
+  function unreadTextOf(unread: number): string | null {
+    return showUnread && unread > 0
+      ? t("sidebar.unreadCount", "{{count}} unread", { count: unread })
+      : null;
   }
 
   /** Hand the new order to the same command the Settings arrows use. */
   function handleDragEnd({ active, over }: DragEndEvent) {
     if (!over || active.id === over.id) return;
-    const from = accounts.findIndex((account) => account.id === active.id);
-    const to = accounts.findIndex((account) => account.id === over.id);
+    const from = sortableGroups.findIndex((group) => group.id === active.id);
+    const to = sortableGroups.findIndex((group) => group.id === over.id);
     if (from === -1 || to === -1) return;
-    void reorder(arrayMove(accounts, from, to));
+    // The groups that can be dragged are exactly the accounts, in display order,
+    // and each carries its own record — so the new order is written from the
+    // same objects the rest of the app reads rather than from bare ids.
+    const reordered = arrayMove(sortableGroups, from, to)
+      .map((group) => group.account)
+      .filter((account): account is Account => account !== null);
+    void reorder(reordered);
   }
 
-  const allUnreadText = showUnread && totalUnread > 0
-    ? t("sidebar.unreadCount", "{{count}} unread", { count: totalUnread })
-    : null;
-  const allLabel = accessibleLabelOf(t("sidebar.allAccounts", "All accounts"), allUnreadText);
+  const roleLabels: Record<string, string> = {
+    inbox: t("sidebar.inbox"),
+    sent: t("sidebar.sent"),
+    drafts: t("sidebar.drafts"),
+    trash: t("sidebar.trash"),
+    archive: t("sidebar.archive"),
+    spam: t("sidebar.spam"),
+  };
 
-  return (
-    <div
-      className="scroll-region"
-      data-testid="account-list"
-      role="group"
-      aria-label={t("settings.emailAccounts", "Email Accounts")}
-      style={{
-        padding: collapsed ? "4px 8px 6px" : "0 8px 2px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "2px",
-        maxHeight: "34vh",
-        overflowY: "auto",
-      }}
-    >
-      {showAllRow && (
-        <div
-          data-testid="account-row-all"
-          className="sidebar-account-row"
-          data-selected={allSelected ? "true" : undefined}
-        >
+  /**
+   * One folder row inside a group.
+   *
+   * A real folder shows its own unread mail. A combined role shows the total
+   * across every account, because that row stands for all of their copies at
+   * once — the same expansion the message list performs when the row is opened.
+   */
+  function renderFolderRow(folder: FolderType, group: MailboxGroup): React.ReactNode {
+    const isActive = mailViewActive && folder.id === activeFolderId;
+    const unread = !showUnread
+      ? 0
+      : group.childrenAreCombined
+        ? unreadCountForFolder(folder.id, allFolders, folderUnreadCounts)
+        : folderUnreadCounts[folder.id] ?? 0;
+    const label = folderLabel(folder, roleLabels);
+
+    return (
+      <button
+        key={folder.id}
+        type="button"
+        className="sidebar-row sidebar-row--nested"
+        onClick={() => onFolderSelect(folder.id, group.id)}
+        onContextMenu={(event) => {
+          if (!onFolderContextMenu) return;
+          // The native menu would cover the app's own, and on a folder row it
+          // offers nothing this app can honour anyway.
+          event.preventDefault();
+          onFolderContextMenu(folder, group, { x: event.clientX, y: event.clientY });
+        }}
+        aria-current={isActive ? "page" : undefined}
+        data-selected={isActive ? "true" : undefined}
+        data-testid={`folder-row-${folder.id}`}
+        // The row shows the folder's own name; a nested one is stored as its
+        // whole path, and the tooltip is where the levels above it stay
+        // readable. A name that was never a path carries no tooltip at all,
+        // because a tooltip that repeats the label is only noise.
+        title={folderLeafName(folder.name) === folder.name ? undefined : folder.name}
+      >
+        <span className="sidebar-row-icon">{folderIcon(folder.role, 16)}</span>
+        <span className="sidebar-row-label">{label}</span>
+        <span className="sidebar-count-slot">
+          {unread > 0 && <span className="sidebar-count">{formatUnread(unread)}</span>}
+        </span>
+      </button>
+    );
+  }
+
+  function renderGroupHeader(group: MailboxGroup): React.ReactNode {
+    const unreadText = unreadTextOf(group.unread);
+    const isOpen = !collapsedGroupIds.includes(group.id);
+    // A group with nothing inside cannot be opened, so it is drawn as a plain
+    // row rather than offering a triangle that would do nothing.
+    const canToggle = !collapsed && group.folders.length > 0;
+
+    return (
+      <div
+        data-testid={`account-row-${group.id}`}
+        className="sidebar-account-row"
+        data-selected={group.selected ? "true" : undefined}
+      >
+        {/* The leading column belongs to the disclosure triangle and is
+            reserved whether or not this mailbox has folders to fold, so every
+            avatar in the column sits on one left edge. */}
+        {!collapsed && (canToggle ? (
           <button
             type="button"
-            onClick={() => handleSelect(null)}
-            aria-current={allSelected ? "true" : undefined}
-            aria-label={collapsed ? allLabel : undefined}
-            title={collapsed ? allLabel : undefined}
-            className={buttonClass(collapsed)}
+            className="sidebar-group-toggle"
+            onClick={() => onToggleGroup(group.id)}
+            aria-expanded={isOpen}
+            data-testid={`account-toggle-${group.id}`}
+            aria-label={t("sidebar.toggleMailbox", "{{name}} folders", { name: group.full })}
+            title={t("sidebar.toggleMailbox", "{{name}} folders", { name: group.full })}
           >
-            <span style={avatarStackStyle()}>
-              <span style={avatarStyle("var(--color-accent)", allSelected, collapsed)} aria-hidden="true">
-                <Layers size={collapsed ? 14 : 12} />
+            <ChevronRight
+              size={13}
+              className="sidebar-group-chevron"
+              data-open={isOpen ? "true" : "false"}
+            />
+          </button>
+        ) : (
+          <span className="sidebar-group-toggle-spacer" aria-hidden="true" />
+        ))}
+        <button
+          type="button"
+          onClick={() => onSelectGroup(group.id)}
+          aria-current={group.selected ? "true" : undefined}
+          aria-label={collapsed ? accessibleLabelOf(group.full, unreadText) : undefined}
+          title={collapsed ? accessibleLabelOf(group.full, unreadText) : undefined}
+          data-testid={`account-select-${group.id}`}
+          className={`sidebar-account-button${collapsed ? " sidebar-account-button--collapsed" : ""}`}
+        >
+          <span style={avatarStackStyle()}>
+            <span
+              style={avatarStyle(group.color ?? "var(--color-accent)", group.selected, collapsed)}
+              data-testid={`account-avatar-${group.id}`}
+              aria-hidden="true"
+            >
+              {group.account ? initialOf(group.label) : <Layers size={collapsed ? 14 : 12} />}
+            </span>
+            {collapsed && unreadText && (
+              <UnreadBadge
+                count={group.unread}
+                testId={`account-unread-${group.id}`}
+                title={unreadText}
+              />
+            )}
+          </span>
+          {!collapsed && (
+            <span className="sidebar-account-name">
+              <span className="sidebar-account-title" title={group.full}>
+                {group.label}
               </span>
-              {collapsed && allUnreadText && (
-                <UnreadBadge
-                  count={totalUnread}
-                  testId="account-unread-all"
-                  title={allUnreadText}
-                />
+              {group.secondary && (
+                <span className="sidebar-account-address">{group.secondary}</span>
               )}
             </span>
-            {!collapsed && (
-              <span className="sidebar-row-label">
-                {t("sidebar.allAccounts", "All accounts")}
+          )}
+        </button>
+        {/* Rendered even at zero unread so the action stays discoverable; the
+            button disables itself. It is absent for the combined view, where
+            "mark all read" has no single mailbox to clear. */}
+        {!collapsed && group.selected && group.canMarkAllRead && group.account && (
+          // A press on the action must not be read as picking up the row.
+          <span className="sidebar-row-action" onPointerDown={(event) => event.stopPropagation()}>
+            <MarkAllReadButton
+              accountId={group.account.id}
+              accountLabel={group.full}
+              unread={group.unread}
+              style={{ width: 22, height: 22, padding: 0, borderRadius: 6 }}
+            />
+          </span>
+        )}
+        {!collapsed && (
+          <span className="sidebar-count-slot">
+            {unreadText && (
+              <span
+                className="sidebar-count"
+                data-testid={`account-unread-${group.id}`}
+                title={unreadText}
+              >
+                {formatUnread(group.unread)}
               </span>
             )}
-          </button>
-          {!collapsed && (
-            <span className="sidebar-count-slot">
-              {allUnreadText && <span className="sidebar-count" data-testid="account-unread-all">{formatUnread(totalUnread)}</span>}
-            </span>
-          )}
-        </div>
-      )}
+          </span>
+        )}
+      </div>
+    );
+  }
 
-      {/* The combined row above stays put: it is a view, not a mailbox, so it
-          takes no part in the order. */}
+  function renderChildren(group: MailboxGroup): React.ReactNode {
+    const isOpen = !collapsedGroupIds.includes(group.id);
+    if (collapsed || group.folders.length === 0 || !isOpen) return null;
+
+    return (
+      <div
+        className="sidebar-group-children"
+        data-testid={`account-folders-${group.id}`}
+        role="group"
+        aria-label={t("sidebar.mailFolders", "Mail folders")}
+      >
+        {group.folders.map((folder) => renderFolderRow(folder, group))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="sidebar-mailboxes" data-testid="account-list">
+      {/* Views that belong to no mailbox sit above the groups, the way macOS
+          Mail keeps its favorites above the accounts. They survive the folded
+          rail too: with the labels gone they are still the only way to reach
+          Starred and Snoozed from the sidebar. */}
+      {pinnedRows}
+
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
         <SortableContext
-          items={accounts.map((account) => account.id)}
+          items={sortableGroups.map((group) => group.id)}
           strategy={verticalListSortingStrategy}
         >
-          {accounts.map((account) => {
-            const isActive = !allSelected && account.id === activeAccountId;
-            const unread = unreadCountForAccount(unreadCounts, account.id);
-            const label = accountLabel(account);
-            // Only repeat the address on a second line when it differs from the label.
-            const secondary = account.account_label?.trim() ? account.email : null;
-            const full = accountOptionLabel(account);
-            const unreadText = showUnread && unread > 0
-              ? t("sidebar.unreadCount", "{{count}} unread", { count: unread })
-              : null;
-
-            return (
-              <SortableAccountRow
-                key={account.id}
-                id={account.id}
+          {groups.map((group) =>
+            group.sortable ? (
+              <SortableAccountGroup
+                key={group.id}
+                id={group.id}
                 disabled={isReordering}
+                header={renderGroupHeader(group)}
               >
-                <div
-                  data-testid={`account-row-${account.id}`}
-                  className="sidebar-account-row"
-                  data-selected={isActive ? "true" : undefined}
-                >
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(account.id)}
-                    aria-current={isActive ? "true" : undefined}
-                    aria-label={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
-                    title={collapsed ? accessibleLabelOf(full, unreadText) : undefined}
-                    className={buttonClass(collapsed)}
-                  >
-                    <span style={avatarStackStyle()}>
-                      <span style={avatarStyle(accountColorOf(account), isActive, collapsed)} aria-hidden="true">
-                        {initialOf(label)}
-                      </span>
-                      {collapsed && unreadText && (
-                        <UnreadBadge
-                          count={unread}
-                          testId={`account-unread-${account.id}`}
-                          title={unreadText}
-                        />
-                      )}
-                    </span>
-                    {!collapsed && (
-                      <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "1px" }}>
-                        <span
-                          title={full}
-                          style={{
-                            fontSize: "12.5px",
-                            fontWeight: isActive ? 600 : 500,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {label}
-                        </span>
-                        {secondary && (
-                          <span
-                            style={{
-                              fontSize: "11px",
-                              color: "var(--color-text-secondary)",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {secondary}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </button>
-                  {/* Rendered even at zero unread so the action stays discoverable; the
-                      button disables itself. It is absent for the combined mailbox,
-                      where "mark all read" has no single target. */}
-                  {!collapsed && isActive && (
-                    // A press on the action must not be read as picking up the row.
-                    <span
-                      className="sidebar-row-action"
-                      onPointerDown={(event) => event.stopPropagation()}
-                    >
-                      <MarkAllReadButton
-                        accountId={account.id}
-                        accountLabel={full}
-                        unread={unread}
-                        style={{ width: 22, height: 22, padding: 0, borderRadius: 6 }}
-                      />
-                    </span>
-                  )}
-                  {!collapsed && (
-                    <span className="sidebar-count-slot">
-                      {unreadText && (
-                        <span
-                          className="sidebar-count"
-                          data-testid={`account-unread-${account.id}`}
-                          title={unreadText}
-                        >
-                          {formatUnread(unread)}
-                        </span>
-                      )}
-                    </span>
-                  )}
-                </div>
-              </SortableAccountRow>
-            );
-          })}
+                {renderChildren(group)}
+              </SortableAccountGroup>
+            ) : (
+              // The combined view is a destination rather than a mailbox, so it
+              // is not draggable and owns no account.
+              <div key={group.id}>
+                {renderGroupHeader(group)}
+                {renderChildren(group)}
+              </div>
+            ),
+          )}
         </SortableContext>
       </DndContext>
     </div>

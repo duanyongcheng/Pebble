@@ -54,6 +54,7 @@
     "navigation": "Sidebar",
     "search": "Search",
     "mailFolders": "Mail folders",
+    "toggleMailbox": "{{name}} folders",
     "tools": "Tools",
     "allAccounts": "All accounts",
     "unreadCount": "{{count}} unread",
@@ -486,6 +487,21 @@
     "markAllReadInProgress": "Marking as read...",
     "markAllReadSuccess": "Marked {{count}} messages as read in {{account}}",
     "markAllReadFailed": "Failed to mark messages as read"
+  },
+  "folderMenu": {
+    "actions": "{{folder}} actions",
+    "markAllRead": "Mark all as read",
+    "markAllReadSuccess": "Marked {{count}} messages as read in {{folder}}",
+    "markAllReadFailed": "Failed to mark messages as read: {{error}}",
+    "syncFolder": "Sync this folder",
+    "syncStarted": "Syncing {{folder}}...",
+    "syncFailed": "Sync failed: {{error}}",
+    "emptyTrash": "Empty Trash",
+    "emptyTrashConfirm": "Permanently delete all messages in Trash?",
+    "emptySpam": "Empty Spam",
+    "emptySpamConfirm": "Permanently delete all messages in Spam?",
+    "emptySuccess": "Deleted {{count}} messages",
+    "emptyFailed": "Failed to empty folder: {{error}}"
   },
   "snooze": {
     "failed": "Snooze failed",

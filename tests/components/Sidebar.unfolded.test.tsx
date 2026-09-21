@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -87,7 +87,9 @@ function renderSidebar() {
 }
 
 function rowButton(accountId: string): HTMLElement {
-  return within(screen.getByTestId(`account-row-${accountId}`)).getAllByRole("button")[0];
+  // The row also carries the disclosure triangle that folds its folders, so the
+  // button that opens the mailbox is found by its own test id.
+  return screen.getByTestId(`account-select-${accountId}`);
 }
 
 describe("Sidebar account list with unfolded mailboxes", () => {

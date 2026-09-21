@@ -46,7 +46,13 @@ export default function MessageActionToolbar({
     queryClient.invalidateQueries({ queryKey: ["messages"] });
     queryClient.invalidateQueries({ queryKey: ["threads"] });
     if (includeUnreadCounts) {
+      // Archive, restore and delete all move unread mail in or out of the
+      // mailbox count, so the sidebar's account badge has to be refreshed
+      // alongside the folder rows. It is a separate query with its own poll, and
+      // leaving it out is what makes a mailbox claim unread mail that no folder
+      // row shows.
       queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });
+      queryClient.invalidateQueries({ queryKey: ["account-unread-counts"] });
     }
   }
 

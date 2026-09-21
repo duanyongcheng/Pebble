@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { updateMessageFlags } from "@/lib/api";
 import type { Message } from "@/lib/api";
 import {
+  invalidateUnreadViews,
   patchMessagesCache,
   snapshotMessagesCache,
   restoreMessagesCache,
@@ -76,13 +77,24 @@ export function useUpdateFlagsMutation() {
       }
     },
     onSettled: (_data, err, params) => {
+      queryClient.invalidateQueries({ queryKey: ["message", params.messageId] });
+
+      // A read-state change moves a message in or out of both unread surfaces:
+      // the folder rows and the sidebar's per-mailbox badge. They are separate
+      // queries with their own 30s polls, and refreshing only the folder rows
+      // leaves the badge showing the old number until its poll happens to fire —
+      // which reads as "no folder has unread mail, but the mailbox still does".
+      // Opening a message is the commonest way to mark mail read, so this is
+      // where that window is most visible.
+      if (!err && params.isRead !== undefined) {
+        invalidateUnreadViews(queryClient);
+        return;
+      }
+
+      // Starring and a failed read change move no unread mail.
       queryClient.invalidateQueries({ queryKey: ["messages"] });
       queryClient.invalidateQueries({ queryKey: ["threads"] });
       queryClient.invalidateQueries({ queryKey: ["starred-messages"] });
-      queryClient.invalidateQueries({ queryKey: ["message", params.messageId] });
-      if (!err && params.isRead !== undefined) {
-        queryClient.invalidateQueries({ queryKey: ["folder-unread-counts"] });
-      }
     },
   });
 }

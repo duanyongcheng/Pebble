@@ -651,6 +651,7 @@ pub fn run() {
             commands::batch::batch_mark_read,
             commands::batch::batch_star,
             commands::mark_all_read::mark_account_all_read,
+            commands::mark_all_read::mark_folder_all_read,
             commands::cloud_sync::test_webdav_connection,
             commands::cloud_sync::backup_to_webdav,
             commands::cloud_sync::export_backup_file,

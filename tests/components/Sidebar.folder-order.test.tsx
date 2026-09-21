@@ -144,17 +144,20 @@ describe("Sidebar folder order", () => {
     }];
   });
 
-  it("uses the same system folder order for a single account as all accounts", () => {
+  it("keeps the system folders in one order inside a mailbox", () => {
     renderSidebar();
 
-    const folderNav = screen.getByRole("navigation", { name: "Mail folders" });
-    const labels = within(folderNav).getAllByRole("button").map((button) => button.textContent);
+    // The system folders are ordered the same way whether the sidebar shows one
+    // mailbox or several, so the row a reader reaches for stays in the same
+    // place as accounts are added. Starred and Snoozed are cross-mailbox views
+    // and now sit above the groups rather than between Drafts and Trash.
+    const group = screen.getByTestId("account-folders-account-1");
+    const labels = within(group).getAllByRole("button").map((button) => button.textContent);
 
     expect(labels).toEqual([
       "Inbox",
       "Sent",
       "Archive",
-      "Starred",
       "Drafts",
       "Trash",
       "Spam",

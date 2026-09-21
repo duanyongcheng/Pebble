@@ -12,15 +12,80 @@ pub type FolderRemoteMessageState = (String, String, bool, bool, i64);
 /// drafts, trash or spam.
 ///
 /// A message with several folders (Gmail labels, indexed mirrors) is excluded
-/// only when every one of its folders is junk, so a mail filed in both Spam and
-/// Inbox is still counted once. `m` must be the `messages` alias.
+/// only when *every* one of its folders is junk, so a mail filed in both Spam
+/// and Inbox is still counted once. A folder with no role is a custom folder,
+/// which is not junk either.
+///
+/// That "every" is load-bearing and was not always what this predicate did: the
+/// earlier `NOT EXISTS (junk folder)` form dropped a message as soon as *any*
+/// one of its folders was junk, so a mail tagged both Inbox and Spam vanished
+/// from the mailbox count while the Inbox row still counted it — the mirror
+/// image of the phantom below. Stating the rule positively keeps the two sides
+/// agreeing.
+///
+/// The `EXISTS` half is what keeps this number equal to the sum of the
+/// mailbox's own folder rows ([`Store::get_folder_unread_counts`]). Those rows
+/// join `message_folders`, so a message that has lost its last folder relation
+/// is invisible in every one of them — and would otherwise be counted here but
+/// nowhere the user can see. That is the "no folder shows unread mail, but the
+/// mailbox still does" report: a phantom the folder-scoped "mark all as read"
+/// cannot clear, because there is no folder row to open its menu on.
+///
+/// Folder-less mail is reachable through no folder row, so counting it here
+/// would make the mailbox number impossible to clear: [`Store::list_unread_message_refs`]
+/// shares this predicate, so the account-wide "mark all as read" would keep
+/// finding it, but the sidebar only offers that action on a folder row.
+///
+/// `m` must be the `messages` alias.
 const UNREAD_MAIL_PREDICATE: &str = "m.is_read = 0
      AND m.is_deleted = 0
-     AND NOT EXISTS (
-        SELECT 1 FROM message_folders mf_junk
-          JOIN folders f_junk ON f_junk.id = mf_junk.folder_id
-         WHERE mf_junk.message_id = m.id AND f_junk.role IN ('trash', 'spam', 'drafts')
+     AND EXISTS (
+        SELECT 1 FROM message_folders mf_mail
+          JOIN folders f_mail ON f_mail.id = mf_mail.folder_id
+         WHERE mf_mail.message_id = m.id
+           AND (f_mail.role IS NULL OR f_mail.role NOT IN ('trash', 'spam', 'drafts'))
      )";
+
+/// SQL predicate selecting the messages one *folder's* unread badge counts:
+/// unread and not soft-deleted, and nothing more.
+///
+/// Deliberately weaker than [`UNREAD_MAIL_PREDICATE`]. That one describes a
+/// mailbox's unread mail, which is what the app badge shows, so it drops
+/// anything filed only under drafts, trash or spam. A folder-scoped action has
+/// to agree with the folder's own count instead ([`Store::get_folder_unread_counts`]),
+/// and a folder that *is* the trash has nothing else to offer — applying the
+/// mailbox predicate there would leave "mark all as read" with no targets at
+/// all, in the one folder where the count is most visible.
+const FOLDER_UNREAD_PREDICATE: &str = "m.is_read = 0 AND m.is_deleted = 0";
+
+/// The SELECT behind every "list unread mail as flag targets" query.
+///
+/// `where_clause` decides *which* unread mail the caller means — one mailbox, or
+/// one folder inside it — and is expected to carry both its own scope test and
+/// the unread predicate that scope counts with.
+///
+/// The two folder columns are resolved by the same ordered subquery
+/// (`sort_order`, then `id`), so an IMAP `STORE` never lands in a different
+/// mailbox than the one whose uid it carries. That resolution is deliberately
+/// *not* narrowed to the folders a folder-scoped caller asked about: a message
+/// that is tagged with several folders has exactly one physical home on IMAP,
+/// and the uid in `remote_id` is only valid in that one.
+fn unread_refs_sql(where_clause: &str) -> String {
+    format!(
+        "SELECT m.id, m.remote_id,
+                (SELECT f.id FROM message_folders mf
+                   JOIN folders f ON f.id = mf.folder_id
+                  WHERE mf.message_id = m.id
+                  ORDER BY f.sort_order ASC, f.id ASC LIMIT 1),
+                (SELECT f.remote_id FROM message_folders mf
+                   JOIN folders f ON f.id = mf.folder_id
+                  WHERE mf.message_id = m.id
+                  ORDER BY f.sort_order ASC, f.id ASC LIMIT 1)
+         FROM messages m
+         WHERE {where_clause}
+         ORDER BY m.date DESC, m.id ASC"
+    )
+}
 
 /// One unread message of an account, resolved far enough to write its read
 /// flag back to the provider.
@@ -1894,35 +1959,13 @@ impl Store {
     /// List every unread mail of one account together with the folder a remote
     /// flag write must target. Used by the account-wide "mark all as read"
     /// action, which fans out to the provider in bulk.
-    ///
-    /// `folder_id` and `folder_remote_id` are resolved by the same ordered
-    /// subquery (`sort_order`, then `id`), so an IMAP `STORE` never lands in a
-    /// different mailbox than the one whose uid it carries.
     pub fn list_unread_message_refs(&self, account_id: &str) -> Result<Vec<UnreadMessageRef>> {
+        let sql = unread_refs_sql(&format!(
+            "m.account_id = ?1 AND {UNREAD_MAIL_PREDICATE}"
+        ));
         self.with_read(|conn| {
-            let sql = format!(
-                "SELECT m.id, m.remote_id,
-                        (SELECT f.id FROM message_folders mf
-                           JOIN folders f ON f.id = mf.folder_id
-                          WHERE mf.message_id = m.id
-                          ORDER BY f.sort_order ASC, f.id ASC LIMIT 1),
-                        (SELECT f.remote_id FROM message_folders mf
-                           JOIN folders f ON f.id = mf.folder_id
-                          WHERE mf.message_id = m.id
-                          ORDER BY f.sort_order ASC, f.id ASC LIMIT 1)
-                 FROM messages m
-                 WHERE m.account_id = ?1 AND {UNREAD_MAIL_PREDICATE}
-                 ORDER BY m.date DESC, m.id ASC"
-            );
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![account_id], |row| {
-                Ok(UnreadMessageRef {
-                    message_id: row.get(0)?,
-                    remote_id: row.get(1)?,
-                    folder_id: row.get(2)?,
-                    folder_remote_id: row.get(3)?,
-                })
-            })?;
+            let rows = stmt.query_map(params![account_id], read_unread_ref)?;
             let mut refs = Vec::new();
             for row in rows {
                 refs.push(row?);
@@ -1930,6 +1973,71 @@ impl Store {
             Ok(refs)
         })
     }
+
+    /// List the unread mail of one account **restricted to the given folders**.
+    ///
+    /// Used by the folder-scoped "mark all as read" action. The scope is the
+    /// folders' own unread count ([`Self::get_folder_unread_counts`]) rather
+    /// than the mailbox-wide one, so the number a folder row shows is the number
+    /// this clears — see [`FOLDER_UNREAD_PREDICATE`].
+    ///
+    /// `SELECT DISTINCT` is load-bearing. A message carrying several folders
+    /// (a Gmail label alongside the inbox) joins `message_folders` once per
+    /// matching folder, and the caller would then write the same provider-side
+    /// flag twice and count the message twice.
+    ///
+    /// An empty `folder_ids` matches nothing and returns an empty list: it means
+    /// the caller resolved no real folder, and falling back to the whole mailbox
+    /// would be the one wrong answer.
+    pub fn list_unread_message_refs_in_folders(
+        &self,
+        account_id: &str,
+        folder_ids: &[String],
+    ) -> Result<Vec<UnreadMessageRef>> {
+        if folder_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // The placeholders are numbered after ?1 so the account id stays first;
+        // the ids themselves are still bound, never interpolated.
+        let placeholders = (0..folder_ids.len())
+            .map(|index| format!("?{}", index + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = unread_refs_sql(&format!(
+            "m.account_id = ?1 AND {FOLDER_UNREAD_PREDICATE}
+             AND EXISTS (
+                SELECT 1 FROM message_folders mf_scope
+                 WHERE mf_scope.message_id = m.id
+                   AND mf_scope.folder_id IN ({placeholders})
+             )"
+        ));
+
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(folder_ids.len() + 1);
+            bound.push(&account_id);
+            for folder_id in folder_ids {
+                bound.push(folder_id);
+            }
+            let rows = stmt.query_map(bound.as_slice(), read_unread_ref)?;
+            let mut refs = Vec::new();
+            for row in rows {
+                refs.push(row?);
+            }
+            Ok(refs)
+        })
+    }
+}
+
+/// Maps one row of [`unread_refs_sql`] onto a flag target.
+fn read_unread_ref(row: &Row) -> rusqlite::Result<UnreadMessageRef> {
+    Ok(UnreadMessageRef {
+        message_id: row.get(0)?,
+        remote_id: row.get(1)?,
+        folder_id: row.get(2)?,
+        folder_remote_id: row.get(3)?,
+    })
 }
 
 #[cfg(test)]
@@ -3103,6 +3211,35 @@ mod unread_mail_scope_tests {
         assert_eq!(refs[1].remote_id, "2");
     }
 
+    /// A message tagged with a junk folder *and* a real one is still a mailbox's
+    /// unread mail: only mail that is junk in every folder it carries is junk.
+    ///
+    /// The Inbox row counts such a message, so the mailbox badge has to as well.
+    /// Excluding it on the strength of the Spam tag alone is what makes a folder
+    /// row and the badge disagree in the other direction.
+    #[test]
+    fn unread_counts_keep_a_message_that_is_junk_in_only_one_of_its_folders() {
+        let store = Store::open_in_memory().unwrap();
+        let account_id = make_account(&store, "mixed@example.com");
+        let inbox = make_folder(&store, &account_id, "INBOX", Some(FolderRole::Inbox), 0);
+        let spam = make_folder(&store, &account_id, "Spam", Some(FolderRole::Spam), 4);
+
+        let both = make_message(&account_id, "mixed", false, false, now_timestamp());
+        store
+            .insert_message(&both, &[inbox.clone(), spam.clone()])
+            .unwrap();
+
+        assert_eq!(
+            store.get_unread_counts_by_account().unwrap(),
+            vec![(account_id.clone(), 1)],
+            "an Inbox copy keeps the message in the mailbox count"
+        );
+        // The Inbox row counts it too, so the two numbers agree.
+        let folder_counts = store.get_folder_unread_counts(&account_id).unwrap();
+        assert_eq!(folder_counts.get(&inbox), Some(&1));
+        assert_eq!(folder_counts.get(&spam), Some(&1));
+    }
+
     #[test]
     fn unread_counts_stay_separate_per_account() {
         let store = Store::open_in_memory().unwrap();
@@ -3137,7 +3274,7 @@ mod unread_mail_scope_tests {
     }
 
     #[test]
-    fn unread_refs_resolve_one_folder_and_survive_missing_folders() {
+    fn unread_refs_resolve_one_folder_and_exclude_folder_less_mail() {
         let store = Store::open_in_memory().unwrap();
         let account_id = make_account(&store, "folders@example.com");
         let label = make_folder(&store, &account_id, "Label", None, 9);
@@ -3171,11 +3308,173 @@ mod unread_mail_scope_tests {
             .expect("a message in a custom folder is still unread mail");
         assert_eq!(custom_ref.folder_remote_id.as_deref(), Some("Orphan"));
 
-        let orphan_ref = refs
-            .iter()
-            .find(|r| r.message_id == no_folder.id)
-            .expect("a message without folders still has an unread flag");
-        assert!(orphan_ref.folder_id.is_none());
-        assert!(orphan_ref.folder_remote_id.is_none());
+        // Folder-less mail is invisible in every list, because they all join
+        // `message_folders`. Counting it as a mailbox's unread mail is what makes
+        // a badge show unread that no folder row explains, so it is not unread
+        // mail. The row itself is left alone here; retiring it is the folder
+        // operation's job.
+        assert!(
+            refs.iter().all(|r| r.message_id != no_folder.id),
+            "a message without folders must not inflate a mailbox's unread count"
+        );
+        assert_eq!(
+            store.get_unread_counts_by_account().unwrap(),
+            vec![(account_id.clone(), 2)],
+            "only the inbox and custom-folder messages are unread mail"
+        );
+    }
+
+    #[test]
+    fn unread_counts_agree_with_the_sum_of_the_folder_rows() {
+        let store = Store::open_in_memory().unwrap();
+        let account_id = make_account(&store, "agree@example.com");
+        let inbox = make_folder(&store, &account_id, "INBOX", Some(FolderRole::Inbox), 0);
+        let archive = make_folder(&store, &account_id, "Archive", Some(FolderRole::Archive), 2);
+        let spam = make_folder(&store, &account_id, "Spam", Some(FolderRole::Spam), 4);
+        let base = now_timestamp();
+
+        // Two unread in the inbox, one in the archive, one spam-only.
+        for (remote_id, folder) in [("1", &inbox), ("2", &inbox), ("3", &archive), ("4", &spam)] {
+            store
+                .insert_message(
+                    &make_message(&account_id, remote_id, false, false, base),
+                    std::slice::from_ref(folder),
+                )
+                .unwrap();
+        }
+        // A message in two non-junk folders is one unread mail, not two: the
+        // badge counts messages while each folder row counts its own copy.
+        let shared = make_message(&account_id, "shared", false, false, base);
+        store
+            .insert_message(&shared, &[inbox.clone(), archive.clone()])
+            .unwrap();
+        // Folder-less mail is not reachable from any row, so it must not count.
+        store
+            .insert_message(&make_message(&account_id, "ghost", false, false, base), &[])
+            .unwrap();
+
+        let account_total = store
+            .get_unread_counts_by_account()
+            .unwrap()
+            .into_iter()
+            .find(|(id, _)| id == &account_id)
+            .map(|(_, count)| count)
+            .expect("the account has unread mail");
+
+        let folder_counts = store.get_folder_unread_counts(&account_id).unwrap();
+        assert_eq!(folder_counts.get(&inbox), Some(&3));
+        assert_eq!(folder_counts.get(&archive), Some(&2));
+        assert_eq!(folder_counts.get(&spam), Some(&1));
+
+        // Inbox, archive and the shared message — the spam-only one is junk and
+        // the folder-less one is invisible, so neither is a mailbox's unread mail.
+        assert_eq!(account_total, 4);
+    }
+
+    #[test]
+    fn folder_refs_stay_inside_the_named_folder() {
+        let store = Store::open_in_memory().unwrap();
+        let account_id = make_account(&store, "scoped@example.com");
+        let inbox = make_folder(&store, &account_id, "INBOX", Some(FolderRole::Inbox), 0);
+        let archive = make_folder(&store, &account_id, "Archive", Some(FolderRole::Archive), 2);
+        let base = now_timestamp();
+
+        let in_inbox = make_message(&account_id, "40", false, false, base);
+        let in_archive = make_message(&account_id, "41", false, false, base - 1);
+        let read = make_message(&account_id, "42", true, false, base - 2);
+        let deleted = make_message(&account_id, "43", false, true, base - 3);
+
+        store
+            .insert_message(&in_inbox, std::slice::from_ref(&inbox))
+            .unwrap();
+        store
+            .insert_message(&in_archive, std::slice::from_ref(&archive))
+            .unwrap();
+        store
+            .insert_message(&read, std::slice::from_ref(&inbox))
+            .unwrap();
+        store
+            .insert_message(&deleted, std::slice::from_ref(&inbox))
+            .unwrap();
+
+        let scoped = store
+            .list_unread_message_refs_in_folders(&account_id, std::slice::from_ref(&inbox))
+            .unwrap();
+        let ids: Vec<&str> = scoped.iter().map(|r| r.message_id.as_str()).collect();
+        assert_eq!(ids, vec![in_inbox.id.as_str()]);
+        assert_eq!(scoped[0].folder_remote_id.as_deref(), Some("INBOX"));
+    }
+
+    #[test]
+    fn folder_refs_list_a_multi_folder_message_once() {
+        let store = Store::open_in_memory().unwrap();
+        let account_id = make_account(&store, "labels@example.com");
+        let inbox = make_folder(&store, &account_id, "INBOX", Some(FolderRole::Inbox), 0);
+        let label = make_folder(&store, &account_id, "Label", None, 9);
+
+        let tagged = make_message(&account_id, "50", false, false, now_timestamp());
+        store
+            .insert_message(&tagged, &[inbox.clone(), label.clone()])
+            .unwrap();
+
+        // Both folders match, so the join would emit the row twice without
+        // DISTINCT — and the caller would write the same flag twice.
+        let both = store
+            .list_unread_message_refs_in_folders(&account_id, &[inbox, label])
+            .unwrap();
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].message_id, tagged.id);
+    }
+
+    #[test]
+    fn folder_refs_scope_to_the_folders_own_count_not_the_mailbox_one() {
+        let store = Store::open_in_memory().unwrap();
+        let account_id = make_account(&store, "trash@example.com");
+        let inbox = make_folder(&store, &account_id, "INBOX", Some(FolderRole::Inbox), 0);
+        let trash = make_folder(&store, &account_id, "Trash", Some(FolderRole::Trash), 4);
+
+        let junk = make_message(&account_id, "60", false, false, now_timestamp());
+        store
+            .insert_message(&junk, std::slice::from_ref(&trash))
+            .unwrap();
+
+        // The mailbox-wide scope drops junk-only mail, so the trash folder would
+        // have no targets at all under that predicate. The folder's own count
+        // includes it, and the two must agree.
+        let counts = store.get_folder_unread_counts(&account_id).unwrap();
+        assert_eq!(counts.get(&trash), Some(&1));
+
+        let scoped = store
+            .list_unread_message_refs_in_folders(&account_id, std::slice::from_ref(&trash))
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].folder_remote_id.as_deref(), Some("Trash"));
+
+        // The empty inbox is the control: the scope is the folder asked for,
+        // not the mailbox it lives in.
+        assert!(store
+            .list_unread_message_refs_in_folders(&account_id, std::slice::from_ref(&inbox))
+            .unwrap()
+            .is_empty());
+        assert!(store.list_unread_message_refs(&account_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn folder_refs_with_no_folders_match_nothing() {
+        let store = Store::open_in_memory().unwrap();
+        let account_id = make_account(&store, "empty@example.com");
+        let inbox = make_folder(&store, &account_id, "INBOX", Some(FolderRole::Inbox), 0);
+        store
+            .insert_message(
+                &make_message(&account_id, "70", false, false, now_timestamp()),
+                std::slice::from_ref(&inbox),
+            )
+            .unwrap();
+
+        // An unresolved folder must never widen to the whole mailbox.
+        assert!(store
+            .list_unread_message_refs_in_folders(&account_id, &[])
+            .unwrap()
+            .is_empty());
     }
 }
