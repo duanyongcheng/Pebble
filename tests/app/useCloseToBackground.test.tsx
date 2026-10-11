@@ -1,6 +1,6 @@
 import { render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { startSync, stopSync } from "../../src/lib/api";
+import { quitApp, startSync, stopSync } from "../../src/lib/api";
 
 const mocks = vi.hoisted(() => ({
   accounts: [{ id: "account-1" }, { id: "account-2" }],
@@ -31,6 +31,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 vi.mock("../../src/lib/api", () => ({
+  quitApp: vi.fn().mockResolvedValue(undefined),
   startSync: vi.fn().mockResolvedValue(undefined),
   stopSync: vi.fn().mockResolvedValue(undefined),
 }));
@@ -63,14 +64,18 @@ describe("useCloseToBackground", () => {
     mocks.uiState.realtimeMode = "realtime";
   });
 
-  it("lets the app close normally when background mode is disabled", async () => {
+  it("quits on purpose when background mode is disabled", async () => {
     render(<Harness />);
 
     await waitFor(() => expect(mocks.onCloseRequested).toHaveBeenCalledOnce());
     const preventDefault = vi.fn();
     await mocks.closeHandler?.({ preventDefault });
 
-    expect(preventDefault).not.toHaveBeenCalled();
+    // The event is claimed even here: letting Tauri's wrapper run its default
+    // would destroy the window instead of quitting through the backend, which
+    // is the difference between a clean exit and losing the window state.
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(quitApp).toHaveBeenCalledOnce();
     expect(mocks.hide).not.toHaveBeenCalled();
   });
 
@@ -84,6 +89,7 @@ describe("useCloseToBackground", () => {
 
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(mocks.hide).toHaveBeenCalledOnce();
+    expect(quitApp).not.toHaveBeenCalled();
     expect(stopSync).not.toHaveBeenCalled();
   });
 

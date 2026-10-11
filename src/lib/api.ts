@@ -1017,3 +1017,13 @@ export async function setXOAuth2Refresh(input: XOAuth2RefreshInput): Promise<voi
 export async function getXOAuth2Status(accountId: string): Promise<XOAuth2Status> {
   return invoke<XOAuth2Status>("get_xoauth2_status", { accountId });
 }
+
+/**
+ * Leave for good, because the user asked to.
+ *
+ * Closing the window hides it to the tray, so leaving is a separate decision
+ * that has to be stated: this is what "quit on close" calls.
+ */
+export async function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
+}

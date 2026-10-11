@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useUIStore } from "@/stores/ui.store";
-import { startSync } from "@/lib/api";
+import { quitApp, startSync } from "@/lib/api";
 import { useAccountsQuery } from "@/hooks/queries";
 
 export function useCloseToBackground() {
@@ -16,11 +16,20 @@ export function useCloseToBackground() {
 
     appWindow
       .onCloseRequested((event) => {
+        // Tauri's JS wrapper destroys the window when this handler returns
+        // without `preventDefault`, and `destroy()` never raises Rust's
+        // `CloseRequested` event — the one place the window is hidden instead of
+        // destroyed. Letting the default run would therefore tear the window
+        // down behind the backend's back and take the whole app with it, since
+        // the window is the only one it has. So the event is always claimed and
+        // the outcome chosen here: hide, or leave on purpose.
+        event.preventDefault();
+
         if (!useUIStore.getState().keepRunningInBackground) {
+          void quitApp().catch((err) => console.warn("Failed to quit on close", err));
           return;
         }
 
-        event.preventDefault();
         void appWindow
           .hide()
           .catch((err) => console.warn("Failed to hide window on close", err));

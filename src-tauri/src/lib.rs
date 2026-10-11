@@ -94,6 +94,18 @@ fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Leave for good, because the user asked to.
+///
+/// Closing the window is not a quit on its own: the frontend decides between
+/// hiding to the tray and actually leaving, and this is the leaving half. It
+/// goes through `AppHandle::exit` rather than destroying the window so that
+/// `RunEvent::ExitRequested` still runs — that is where the last window
+/// geometry is flushed, which a destroyed window would take with it.
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 fn is_mailto_url(value: &str) -> bool {
     value
         .trim_start()
@@ -546,6 +558,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             set_tray_menu_labels,
+            quit_app,
             take_pending_mailto_urls,
             profile::get_profile_storage_namespace,
             commands::autostart::get_autostart_enabled,
